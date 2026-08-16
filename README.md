@@ -4,7 +4,14 @@
 
 ## 開発状況
 
-MVP優先で段階的に実装中(計算コア → DB → 化学式パーサー → RDKit/PubChem連携 → GUI → パッケージング)。
+Phase 1〜6完了(計算コア・化学式パーサー・DB層・RDKit/PubChem連携・解決ロジック統合・PySide6 GUI)。
+残りはPhase 7/8(macOS/Windowsパッケージング)。テストは`tests/`配下に125件。
+
+## 起動
+
+```bash
+python main.py
+```
 
 ## セットアップ(開発)
 
