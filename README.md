@@ -22,6 +22,21 @@ pip install -r requirements.txt
 pytest
 ```
 
+### 構造式エディタ(Ketcher)の準備
+
+「化合物が見つかりません」ダイアログの「構造式を描く…」ボタンは、
+[Ketcher](https://github.com/epam/ketcher)(オープンソースの構造式エディタ)を
+`QWebEngineView`で埋め込んで使う。リポジトリには同梱していないため、
+初回セットアップ時にNode.js(https://nodejs.org/ )を導入した上で以下を実行する。
+
+```bash
+python scripts/build_ketcher.py
+```
+
+`molweigh/ui/vendor/ketcher/` にビルド成果物が配置される(`.gitignore`済み)。
+未配置の場合、「構造式を描く…」ボタンは警告を出すだけで、他の機能(化学式/SMILESの
+テキスト入力)には影響しない。
+
 ## 動作環境
 
 - Python 3.11推奨(RDKit/PySide6の対応状況が安定)。開発機は現状Python 3.13。

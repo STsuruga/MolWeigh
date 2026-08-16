@@ -13,3 +13,7 @@ dist/
 Thumbs.db
 *.db
 *.sqlite3
+
+# Ketcher(構造式エディタ)のビルド成果物。scripts/build_ketcher.py で生成する。
+.ketcher_build/
+molweigh/ui/vendor/

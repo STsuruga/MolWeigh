@@ -26,6 +26,7 @@ from PySide6.QtCore import Signal
 from ..core import compound_source
 from ..core.compound_source import CompoundInfo
 from ..core.pubchem_client import PubChemError
+from .structure_editor import KetcherNotBundledError, StructureEditorDialog
 
 
 class CompoundSearchBar(QWidget):
@@ -86,6 +87,9 @@ class ManualCompoundDialog(QDialog):
 
         self._input = QLineEdit(query)
 
+        self._draw_button = QPushButton("構造式を描く…")
+        self._draw_button.clicked.connect(self._on_draw_structure)
+
         self._error_label = QLabel("")
         self._error_label.setStyleSheet("color: #A32D2D;")
         self._error_label.hide()
@@ -96,12 +100,26 @@ class ManualCompoundDialog(QDialog):
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
 
+        input_row = QHBoxLayout()
+        input_row.addWidget(self._input)
+        input_row.addWidget(self._draw_button)
+
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(f"「{query}」はライブラリ・PubChemのいずれにも見つかりませんでした。"))
         layout.addWidget(self._mode)
-        layout.addWidget(self._input)
+        layout.addLayout(input_row)
         layout.addWidget(self._error_label)
         layout.addWidget(buttons)
+
+    def _on_draw_structure(self) -> None:
+        try:
+            editor = StructureEditorDialog(self)
+        except KetcherNotBundledError as exc:
+            QMessageBox.warning(self, "構造式エディタを開けません", str(exc))
+            return
+        if editor.exec() == QDialog.DialogCode.Accepted and editor.smiles:
+            self._mode.setCurrentIndex(1)
+            self._input.setText(editor.smiles)
 
     def _on_accept(self) -> None:
         text = self._input.text().strip()

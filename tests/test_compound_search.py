@@ -141,3 +141,50 @@ class TestManualCompoundDialog:
         dialog._on_accept()
         assert dialog.result_info is None
         assert not dialog._error_label.isHidden()
+
+
+class TestManualCompoundDialogDrawStructure:
+    def test_ketcher_not_bundled_shows_warning(self, qapp, monkeypatch):
+        def raise_not_bundled(parent=None):
+            raise compound_search.KetcherNotBundledError("not bundled")
+
+        monkeypatch.setattr(compound_search, "StructureEditorDialog", raise_not_bundled)
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+
+        dialog = ManualCompoundDialog("x")
+        dialog._on_draw_structure()
+
+        assert warnings
+
+    def test_accepted_drawing_fills_smiles_mode(self, qapp, monkeypatch):
+        class FakeEditor:
+            def __init__(self, parent=None):
+                self.smiles = "CCO"
+
+            def exec(self):
+                return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(compound_search, "StructureEditorDialog", FakeEditor)
+
+        dialog = ManualCompoundDialog("x")
+        dialog._on_draw_structure()
+
+        assert dialog._mode.currentIndex() == 1
+        assert dialog._input.text() == "CCO"
+
+    def test_cancelled_drawing_leaves_input_unchanged(self, qapp, monkeypatch):
+        class FakeEditor:
+            def __init__(self, parent=None):
+                self.smiles = None
+
+            def exec(self):
+                return QDialog.DialogCode.Rejected
+
+        monkeypatch.setattr(compound_search, "StructureEditorDialog", FakeEditor)
+
+        dialog = ManualCompoundDialog("x")
+        dialog._input.setText("original")
+        dialog._on_draw_structure()
+
+        assert dialog._input.text() == "original"
