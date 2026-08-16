@@ -119,9 +119,6 @@ class ReagentTableWidget(QWidget):
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._table.setItem(row, 0, item)
 
-        self._add_button = QPushButton("+ 試薬")
-        self._add_button.clicked.connect(self.add_reagent_requested)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._table)
@@ -132,6 +129,19 @@ class ReagentTableWidget(QWidget):
         self._columns.append(column)
         self._rebuild()
         self.columns_changed.emit()
+
+    def replace_column(self, index: int, column: ReagentColumn) -> None:
+        if 0 <= index < len(self._columns):
+            self._columns[index] = column
+            self._rebuild()
+            self.columns_changed.emit()
+
+    def first_blank_column_index(self) -> int | None:
+        """名前もFwも未設定の空き列(デフォルト表示用プレースホルダ)を先頭から探す。"""
+        for i, column in enumerate(self._columns):
+            if not column.name and column.fw is None:
+                return i
+        return None
 
     def remove_column(self, index: int) -> None:
         if 0 <= index < len(self._columns):
@@ -212,7 +222,9 @@ class ReagentTableWidget(QWidget):
 
         add_col = len(self._columns) + 1
         self._table.setColumnWidth(add_col, 70)
-        self._table.setCellWidget(0, add_col, self._add_button)
+        add_button = QPushButton("+ 試薬")
+        add_button.clicked.connect(self.add_reagent_requested)
+        self._table.setCellWidget(0, add_col, add_button)
 
         self._table.blockSignals(False)
 
@@ -220,12 +232,13 @@ class ReagentTableWidget(QWidget):
         old = self._table.cellWidget(row, col)
         if old is None:
             return
+        # 同じWidgetインスタンスをセル間で使い回す(removeCellWidgetで外して
+        # 別のセルにsetCellWidgetし直す)と、このPySide6環境では再描画時に
+        # ネイティブクラッシュする。既存Widgetは必ず破棄し、置き換え先には
+        # 常に新規インスタンスを使う。
         self._table.removeCellWidget(row, col)
-        if old is not self._add_button:
-            # removeCellWidgetはインデックスとの紐付けを解くだけでviewportの子として
-            # 残り続けるため、deleteLater()を待たず即座に親を外して非表示にする。
-            old.setParent(None)
-            old.deleteLater()
+        old.setParent(None)
+        old.deleteLater()
 
     def _render_header(self, table_col: int, index: int, column: ReagentColumn) -> None:
         container = QWidget()

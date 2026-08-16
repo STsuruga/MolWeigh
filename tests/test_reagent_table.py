@@ -72,6 +72,29 @@ class TestReagentTableWidget:
         assert len(remaining) == 1
         assert remaining[0].name == "DMAP"
 
+    def test_first_blank_column_index(self, qapp):
+        widget = ReagentTableWidget()
+        widget.add_column(ReagentColumn())
+        widget.add_column(ReagentColumn())
+        assert widget.first_blank_column_index() == 0
+
+        widget.replace_column(0, ReagentColumn(name="Base", fw=458.27, weight_mg=200))
+        assert widget.first_blank_column_index() == 1
+
+        widget.replace_column(1, ReagentColumn(name="DMAP", fw=122.17))
+        assert widget.first_blank_column_index() is None
+
+    def test_replace_column_keeps_length_and_position(self, qapp):
+        widget = ReagentTableWidget()
+        widget.add_column(ReagentColumn())
+        widget.add_column(ReagentColumn(name="Keep", fw=1.0))
+        widget.replace_column(0, ReagentColumn(name="Filled", fw=458.27))
+
+        columns = widget.columns()
+        assert len(columns) == 2
+        assert columns[0].name == "Filled"
+        assert columns[1].name == "Keep"
+
     def test_editing_eq_cell_updates_column_and_recomputes(self, qapp):
         widget = ReagentTableWidget()
         widget.add_column(ReagentColumn(name="Base", fw=458.27, weight_mg=200))
@@ -100,7 +123,8 @@ class TestReagentTableWidget:
         widget = ReagentTableWidget()
         received = []
         widget.add_reagent_requested.connect(lambda: received.append(True))
-        widget._add_button.click()
+        add_col = widget._table.columnCount() - 1
+        widget._table.cellWidget(0, add_col).click()
         assert received == [True]
 
     def test_columns_changed_signal_on_add(self, qapp):

@@ -22,6 +22,8 @@ from .compound_search import CompoundSearchBar
 from .reagent_table import ReagentColumn, ReagentTableWidget
 from .structure_panel import StructurePanel
 
+DEFAULT_COLUMN_COUNT = 5
+
 
 class MainWindow(QMainWindow):
     def __init__(self, conn: sqlite3.Connection, parent: QWidget | None = None):
@@ -35,6 +37,8 @@ class MainWindow(QMainWindow):
         self._reagent_table = ReagentTableWidget()
         self._reagent_table.column_selected.connect(self._on_column_selected)
         self._reagent_table.add_reagent_requested.connect(self._search_bar._input.setFocus)
+        for _ in range(DEFAULT_COLUMN_COUNT):
+            self._reagent_table.add_column(ReagentColumn())
 
         self._structure_panel = StructurePanel()
 
@@ -65,7 +69,12 @@ class MainWindow(QMainWindow):
         self._refresh_template_combo()
 
     def _on_compound_resolved(self, info: CompoundInfo) -> None:
-        self._reagent_table.add_column(_compound_info_to_column(info))
+        column = _compound_info_to_column(info)
+        blank_index = self._reagent_table.first_blank_column_index()
+        if blank_index is not None:
+            self._reagent_table.replace_column(blank_index, column)
+        else:
+            self._reagent_table.add_column(column)
 
     def _on_column_selected(self, index: int) -> None:
         columns = self._reagent_table.columns()
@@ -118,7 +127,7 @@ class MainWindow(QMainWindow):
         if not ok or not name.strip():
             return
 
-        columns = self._reagent_table.columns()
+        columns = [c for c in self._reagent_table.columns() if c.name or c.fw is not None]
         if not columns:
             QMessageBox.information(self, "テンプレート保存", "試薬が登録されていません。")
             return

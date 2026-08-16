@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox
 from molweigh.core.compound_source import CompoundInfo
 from molweigh.db import library_repo, schema, template_repo
 from molweigh.db.library_repo import LibraryEntry
-from molweigh.ui.main_window import MainWindow
+from molweigh.ui.main_window import DEFAULT_COLUMN_COUNT, MainWindow
 from molweigh.ui.reagent_table import ReagentColumn
 
 
@@ -25,7 +25,13 @@ class TestMainWindowBasics:
         assert window._template_combo.count() == 1
         assert window._template_combo.itemData(0) is None
 
-    def test_compound_resolved_adds_column(self, qapp, conn):
+    def test_starts_with_default_blank_columns(self, qapp, conn):
+        window = MainWindow(conn)
+        columns = window._reagent_table.columns()
+        assert len(columns) == DEFAULT_COLUMN_COUNT
+        assert all(c.name == "" and c.fw is None for c in columns)
+
+    def test_compound_resolved_fills_first_blank_column(self, qapp, conn):
         window = MainWindow(conn)
         info = CompoundInfo(
             name="DMAP", formula="C7H10N2", molecular_weight=122.17,
@@ -33,9 +39,28 @@ class TestMainWindowBasics:
         )
         window._on_compound_resolved(info)
         columns = window._reagent_table.columns()
-        assert len(columns) == 1
+        assert len(columns) == DEFAULT_COLUMN_COUNT
         assert columns[0].name == "DMAP"
         assert columns[0].library_id == 5
+
+    def test_compound_resolved_appends_once_all_blanks_filled(self, qapp, conn):
+        window = MainWindow(conn)
+        for i in range(DEFAULT_COLUMN_COUNT):
+            window._on_compound_resolved(
+                CompoundInfo(
+                    name=f"R{i}", formula=None, molecular_weight=100.0 + i,
+                    density=None, smiles=None, source="pubchem",
+                )
+            )
+        window._on_compound_resolved(
+            CompoundInfo(
+                name="Overflow", formula=None, molecular_weight=1.0,
+                density=None, smiles=None, source="pubchem",
+            )
+        )
+        columns = window._reagent_table.columns()
+        assert len(columns) == DEFAULT_COLUMN_COUNT + 1
+        assert columns[-1].name == "Overflow"
 
     def test_column_selected_updates_structure_panel(self, qapp, conn):
         window = MainWindow(conn)
@@ -130,11 +155,12 @@ class TestLoadTemplate:
 
     def test_no_selection_shows_info(self, qapp, conn, monkeypatch):
         window = MainWindow(conn)
+        columns_before = window._reagent_table.columns()
         infos = []
         monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: infos.append(a))
         window._on_load_template()
         assert infos
-        assert window._reagent_table.columns() == []
+        assert window._reagent_table.columns() == columns_before
 
     def test_missing_library_entry_is_skipped_with_notice(self, qapp, conn, monkeypatch):
         template_id = template_repo.create(
