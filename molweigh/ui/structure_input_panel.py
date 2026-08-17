@@ -153,7 +153,10 @@ class StructureInputPanel(QFrame):
         except ValueError as exc:
             self._show_error(str(exc))
             return
-        MoleculeLineArtWebDialog(data, self).exec()
+        dialog = MoleculeLineArtWebDialog(data, smiles, self)
+        dialog.exec()
+        if dialog.molblock_to_apply is not None and self._ketcher is not None:
+            self._ketcher.set_smiles(dialog.molblock_to_apply)
 
     def _on_realign(self) -> None:
         if self._ketcher is None:

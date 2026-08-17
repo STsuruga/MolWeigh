@@ -18,9 +18,9 @@ from __future__ import annotations
 import json
 
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ..core.structure import LineArtMolecule
+from ..core.structure import LineArtMolecule, build_molblock_from_lineart_layout
 from . import theme
 
 # --- 幾何処理(回転・正射影・線分交差判定・隠線ギャップ計算)+ 描画 + マウス操作 ---
@@ -110,6 +110,15 @@ _LINEART_JS = r"""
       return { sx: rx * scale + w / 2, sy: -ry * scale + h / 2, depth: rz };
     });
   }
+
+  // 「この向きを2Dに反映」ボタン用: 画面スケール・オフセットを含まない、
+  // 現在の回転だけを適用したモデル空間のXY座標を返す(Python側でMOLブロック化する)。
+  window.__MOLWEIGH_GET_LAYOUT__ = function () {
+    var m = quatToMatrix(rotation);
+    return atoms.map(function (a) {
+      return [m[0] * a.x + m[1] * a.y + m[2] * a.z, m[3] * a.x + m[4] * a.y + m[5] * a.z];
+    });
+  };
 
   // 2D線分p1-p2とp3-p4の交点をパラメトリックに解く。端点での接触(共有原子)は
   // 対象外にするため、0<t<1・0<u<1の厳密な内部交差のみを交点として扱う。
@@ -287,23 +296,57 @@ class MoleculeLineArtWebView(QWidget):
 
 
 class MoleculeLineArtWebDialog(QDialog):
-    """`MoleculeLineArtWebView` を包む読み取り専用のプレビューダイアログ。"""
+    """`MoleculeLineArtWebView` を包むプレビューダイアログ。
 
-    def __init__(self, molecule: LineArtMolecule, parent: QWidget | None = None):
+    既定では読み取り専用だが、「この向きを2Dに反映」ボタンで、ユーザーが
+    ドラッグで回転させた今の見た目をそのまま2DレイアウトのMOLブロックとして
+    書き出せる(2D構造式の再構築のみ行い、`smiles`自体は変更しない)。
+    呼び出し側は`exec()`後に`molblock_to_apply`が`None`でなければ、それを
+    Ketcherの`set_smiles()`に渡して反映する。
+    """
+
+    def __init__(self, molecule: LineArtMolecule, smiles: str, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("3Dプレビュー")
         self.resize(600, 600)
 
-        hint_label = QLabel("ドラッグで回転、ホイールでズームできます(2D構造には反映されません)。")
+        self._smiles = smiles
+        self.molblock_to_apply: str | None = None
+
+        hint_label = QLabel(
+            "ドラッグで回転、ホイールでズームできます。"
+            "「この向きを2Dに反映」で今の見た目を2D構造式に書き戻せます。"
+        )
         hint_label.setWordWrap(True)
         hint_label.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 12px;")
 
         self._view = MoleculeLineArtWebView(molecule, self)
 
+        self._reflect_button = QPushButton("この向きを2Dに反映")
+        self._reflect_button.clicked.connect(self._on_reflect)
+
         close_button = QPushButton("閉じる")
-        close_button.clicked.connect(self.accept)
+        close_button.clicked.connect(self.reject)
+
+        button_row = QHBoxLayout()
+        button_row.addWidget(self._reflect_button)
+        button_row.addWidget(close_button)
 
         layout = QVBoxLayout(self)
         layout.addWidget(hint_label)
         layout.addWidget(self._view, 1)
-        layout.addWidget(close_button)
+        layout.addLayout(button_row)
+
+    def _on_reflect(self) -> None:
+        self._reflect_button.setEnabled(False)
+        self._view._view.page().runJavaScript(
+            "JSON.stringify(window.__MOLWEIGH_GET_LAYOUT__())", self._on_layout_received
+        )
+
+    def _on_layout_received(self, value: object) -> None:
+        if not isinstance(value, str):
+            self._reflect_button.setEnabled(True)
+            return
+        layout = [(pt[0], pt[1]) for pt in json.loads(value)]
+        self.molblock_to_apply = build_molblock_from_lineart_layout(self._smiles, layout)
+        self.accept()

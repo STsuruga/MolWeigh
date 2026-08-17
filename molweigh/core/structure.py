@@ -117,6 +117,28 @@ def generate_lineart_data(smiles: str) -> LineArtMolecule:
     return LineArtMolecule(atoms=atoms, bonds=bonds)
 
 
+def build_molblock_from_lineart_layout(smiles: str, layout: list[tuple[float, float]]) -> str:
+    """線画3Dビューア(`ui/molecule_lineart_viewer.py`)で表示中の分子に対し、
+    ユーザーがマウスで回転させた「今見ている向き」のXY座標(JS側で計算済み)を
+    そのまま2Dレイアウトとして持つMOLブロックを作る。
+
+    `generate_lineart_data`と同じ経路(`embed_and_optimize` → `RemoveHs`)で
+    Molを組み立て直す。埋め込みは固定シードで決定的なため、原子順序は
+    ビューアが表示していたものと一致する(`layout`の各要素と対応)。
+    """
+    mol_3d = structure_3d.embed_and_optimize(smiles)
+    mol = Chem.RemoveHs(mol_3d)
+    if mol.GetNumAtoms() != len(layout):
+        raise ValueError("原子数が一致しないため、2Dへの反映に失敗しました。")
+    conformer = Chem.Conformer(mol.GetNumAtoms())
+    for i, (x, y) in enumerate(layout):
+        conformer.SetAtomPosition(i, Point3D(float(x), float(y), 0.0))
+    conformer.Set3D(False)
+    mol.RemoveAllConformers()
+    mol.AddConformer(conformer, assignId=True)
+    return Chem.MolToMolBlock(mol)
+
+
 def _project_3d_to_2d(smiles: str) -> Chem.Mol:
     """3D配座のXY座標をそのまま2Dレイアウトとして流用したMolを作る。"""
     mol_3d = structure_3d.embed_and_optimize(smiles)

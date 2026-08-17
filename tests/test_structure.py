@@ -5,6 +5,7 @@ from rdkit import Chem
 from molweigh.core import structure_3d
 from molweigh.core.structure import (
     _min_pairwise_distance_2d,
+    build_molblock_from_lineart_layout,
     generate_lineart_data,
     orient_canonically,
     parse_smiles,
@@ -93,6 +94,33 @@ class TestGenerateLineartData:
     def test_invalid_smiles_raises(self):
         with pytest.raises(ValueError):
             generate_lineart_data("not-a-smiles(((")
+
+
+class TestBuildMolblockFromLineartLayout:
+    def test_uses_given_xy_as_2d_layout(self):
+        data = generate_lineart_data("CCO")
+        layout = [(0.0, 0.0), (1.5, 0.0), (2.2, 1.2)]
+
+        molblock = build_molblock_from_lineart_layout("CCO", layout)
+
+        assert "V2000" in molblock
+        mol = Chem.MolFromMolBlock(molblock)
+        assert mol is not None
+        assert mol.GetNumAtoms() == len(data.atoms)
+        conformer = mol.GetConformer()
+        for i, (x, y) in enumerate(layout):
+            pos = conformer.GetAtomPosition(i)
+            assert pos.x == pytest.approx(x)
+            assert pos.y == pytest.approx(y)
+            assert pos.z == pytest.approx(0.0)
+
+    def test_mismatched_layout_length_raises(self):
+        with pytest.raises(ValueError):
+            build_molblock_from_lineart_layout("CCO", [(0.0, 0.0)])
+
+    def test_invalid_smiles_raises(self):
+        with pytest.raises(ValueError):
+            build_molblock_from_lineart_layout("not-a-smiles(((", [])
 
 
 class TestOrientCanonically:

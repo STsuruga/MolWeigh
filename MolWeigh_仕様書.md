@@ -192,7 +192,7 @@ render_structure_image(smiles)
 
 ### 4.4 3D配座生成(`core/structure_3d.py`)
 
-ChemDrawの「3D Clean Up」に相当する処理。**Ketcher自身の2D編集データとは完全に独立した別経路**であり、ここで生成した3D構造を2D編集データへ書き戻すことは一切ない(4.5節・4.6節の理由を参照)。
+ChemDrawの「3D Clean Up」に相当する処理。**Ketcher自身の2D編集データとは完全に独立した別経路**である。ここで生成した3D構造は既定では2D編集データへ書き戻さないが、4.6節の線画ビューアには明示的な「この向きを2Dに反映」機能があり、ユーザーが選んだ場合のみ書き戻せる(4.5節・4.6節参照)。
 
 **`embed_and_optimize(smiles) -> Chem.Mol`**:
 1. `Chem.MolFromSmiles` → `Chem.AddHs`(明示的水素付加、現実的な3D形状のために必要)
@@ -205,18 +205,19 @@ ChemDrawの「3D Clean Up」に相当する処理。**Ketcher自身の2D編集�
 
 Ketcherには標準で「3D Viewer」ボタン(Miewエンジンによる表示)があるが、これは**単に回転して見るだけの機能でエネルギー最小化は行わない**。さらに、回転後に画面内の「Apply」ボタンで2D構造へ書き戻すと、Ketcher自身の警告文言(「Stereocenters can be changed after the strong 3D rotation」)の通り**立体中心が壊れることがある**ことを実機検証で確認した。これがユーザー報告のあった「3次元構造を反映すると赤いエラーマークが出る」現象の原因だった。
 
-この経緯から、3D関連機能はすべてKetcherの2D編集データと完全に切り離し、**読み取り専用のプレビュー用途に限定**する設計とした(4.4節・4.6節)。
+この経緯から、3D関連機能は既定でKetcherの2D編集データと切り離し、**読み取り専用のプレビュー**とする設計とした(4.4節)。ただし4.6節の「この向きを2Dに反映」機能は、Ketcher自身の「3D Viewer→Apply」とは全く別の実装(RDKit側でMolを再構築し、JS側で計算済みの回転後XY座標をMOLブロックへ書き込んで`setMolecule()`に渡す)であり、Ketcherの内部3D回転ロジックを一切経由しないため、上記の立体中心破壊は起きない。
 
 ### 4.6 (D) 3Dプレビュー — ChemDraw風線画ビューア(`ui/molecule_lineart_viewer.py`)
 
-「3Dプレビュー」ボタンで開く、マウス操作で回転・ズームできる読み取り専用の3D構造ビューア。
+「3Dプレビュー」ボタンで開く、マウス操作で回転・ズームできる3D構造ビューア。既定では読み取り専用のプレビューだが、「この向きを2Dに反映」ボタンで今の回転角度を2D構造式に書き戻すこともできる(下記参照)。
 
 **採用経緯**: 当初はPySide6の`QPainter`で自作した疑似3Dレンダラー(手動の回転行列適用+正射影+奥行きソート)、次に[3Dmol.js](https://3dmol.org/)(WebGLベースの分子ビューアライブラリ)を採用したが、ChemDrawの「Clean Up 3D Structure」に見た目を寄せたいという要望を踏まえ、**自前実装のベクター線画レンダラーに置き換えた**。ChemDrawの3D表示は立体的な3Dモデルではなく、3D座標を2Dへ正射影したうえで結合線同士の交差箇所に隠線ギャップを入れる「線画」であり、WebGLの球体・厚みのあるスティック表現とは根本的に見た目が異なるため、既存ライブラリの流用ではなく自作が必要だった。
 
 - **役割分担**: 化学計算(3D配座生成)は引き続きPython/RDKit側(`structure_3d.embed_and_optimize` + `structure.generate_lineart_data`)が担う。回転(クォータニオン、ジンバルロック回避)・正射影・線分交差判定・隠線ギャップ計算・SVG描画・マウス操作は**すべてJavaScript側で完結**させ、ドラッグ中にPython⇔JS間の往復は一切発生させない(以前のQPainter自作レンダラーで、フレームごとにPython側で再計算するコストが大きすぎた反省を踏まえた設計)。
 - **隠線ギャップ処理**: 全結合ペアを総当たりで線分交差判定し(結合数は数十〜百程度なのでO(n²)で十分)、交差する2本の結合のうち奥(depthが小さい)側の結合を、交差点付近の固定ピクセル幅(既定3px)だけ分割してギャップを開ける。色や太さでの奥行き表現はChemDraw同様に行わない。
 - **オフライン配信**: 外部ライブラリではなく自前実装のJSのため、Ketcher/3Dmol.js時代のようなローカルHTTPサーバー配信は不要。生成したHTML(原子・結合データのJSONとJSを直接埋め込み)を`QWebEngineView.setHtml()`にそのまま渡すだけで、外部CDN・追加セットアップなしに完全オフラインで動作する。
-- **構成**: `MoleculeLineArtWebView(QWidget)`(ビューア本体、`LineArtMolecule`をJSON化してHTMLへ埋め込み) + `MoleculeLineArtWebDialog(QDialog)`(閉じるボタン付きのダイアログラッパー、600×600、ヒントラベル表示)。ローカルサーバーもファイル同梱もないため、`KetcherNotBundledError`のような「未配置」エラーは存在しない。
+- **構成**: `MoleculeLineArtWebView(QWidget)`(ビューア本体、読み取り専用。`LineArtMolecule`をJSON化してHTMLへ埋め込み) + `MoleculeLineArtWebDialog(QDialog)`(ダイアログラッパー、600×600、ヒントラベル+「この向きを2Dに反映」「閉じる」ボタン)。ローカルサーバーもファイル同梱もないため、`KetcherNotBundledError`のような「未配置」エラーは存在しない。
+- **「この向きを2Dに反映」の実装**: JS側は`window.__MOLWEIGH_GET_LAYOUT__()`で、現在の回転クォータニオンを適用した後(画面スケール・オフセットは含まない)モデル空間のXY座標を返す。Pythonはこれを`page().runJavaScript()`で1回だけ取得し(ドラッグ中の毎フレーム往復ではなく、ボタン押下時の単発クエリ)、`structure.build_molblock_from_lineart_layout(smiles, layout)`で`embed_and_optimize`→`RemoveHs`を再実行して同じ原子順序のMolを組み立て直し(固定シードのため順序が一致する)、その座標をXY・Z=0の2Dコンフォーマーとして上書きしてMOLブロック化する。呼び出し側(`structure_input_panel.py`/`reagent_editor_dialog.py`)は`dialog.exec()`後に`dialog.molblock_to_apply`が`None`でなければ`ketcher.set_smiles()`に渡す。
 
 ### 4.7 構造入力パネルの4つのボタン(`ui/structure_input_panel.py`)
 
@@ -225,7 +226,7 @@ Ketcherには標準で「3D Viewer」ボタン(Miewエンジンによる表示)�
 | ボタン | 処理 | 説明 |
 |---|---|---|
 | **分子量を計算** | `get_smiles` → `compound_source.resolve_from_smiles` | 化学式・分子量ラベルを更新するのみ。計算テーブルには反映しない。「試薬に追加」を押す前でも確認できるようにするための機能。 |
-| **3Dプレビュー** | `get_smiles` → `structure.generate_lineart_data` → `MoleculeLineArtWebDialog` | RDKitでエネルギー最小化した3D構造を、ChemDraw風の線画(隠線ギャップ表示)として別ウィンドウで表示。2D構造には一切反映されない(読み取り専用)。 |
+| **3Dプレビュー** | `get_smiles` → `structure.generate_lineart_data` → `MoleculeLineArtWebDialog` | RDKitでエネルギー最小化した3D構造を、ChemDraw風の線画(隠線ギャップ表示)として別ウィンドウで表示。既定では2D構造に影響しないが、ダイアログ内の「この向きを2Dに反映」を押した場合のみ、回転させた角度をKetcherの2D構造式に書き戻す。 |
 | **橋かけ構造を整列** | `get_smiles` → `structure.realign_bridged_structure_molblock` → (橋かけなら)`ketcher.set_smiles(molblock)` | 現在Ketcherに描かれている構造が橋かけ構造(bridgehead原子あり)であれば、4.3節のアルゴリズムで見やすい向きに再配置したMOLブロックを**Ketcherのキャンバスへ書き戻す**。橋かけ構造でない場合は「整列は不要です」と案内するのみで何もしない。手描きで乱雑になった橋かけ構造をワンクリックで整理できる、Ketcher自身の自動レイアウトを外部から差し替えられないという制約への対処。 |
 | **試薬に追加** | `get_smiles` → `resolve_from_smiles` → `added_to_table.emit(info)` | 化学式・分子量ラベルを更新し、`CompoundInfo`を計算テーブルへ渡す(`MainWindow`が最初の空き列に挿入、なければ新規列を追加)。 |
 

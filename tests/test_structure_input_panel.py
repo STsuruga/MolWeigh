@@ -109,14 +109,29 @@ class TestPreview3D:
         opened = []
         monkeypatch.setattr(
             "molweigh.ui.structure_input_panel.MoleculeLineArtWebDialog",
-            lambda data, parent: opened.append(data) or _FakeDialog(),
+            lambda data, smiles, parent: opened.append((data, smiles)) or _FakeDialog(),
         )
 
         panel._on_smiles_for_3d("CCO")
 
         assert len(opened) == 1
-        assert len(opened[0].atoms) == 3
+        assert len(opened[0][0].atoms) == 3
+        assert opened[0][1] == "CCO"
         assert panel._error_label.text() == ""
+        panel.shutdown()
+
+    def test_reflect_result_is_applied_to_ketcher(self, qapp, monkeypatch):
+        panel = StructureInputPanel()
+        monkeypatch.setattr(
+            "molweigh.ui.structure_input_panel.MoleculeLineArtWebDialog",
+            lambda data, smiles, parent: _FakeDialog(molblock_to_apply="fake molblock"),
+        )
+        received = []
+        monkeypatch.setattr(panel._ketcher, "set_smiles", lambda text: received.append(text))
+
+        panel._on_smiles_for_3d("CCO")
+
+        assert received == ["fake molblock"]
         panel.shutdown()
 
     def test_without_ketcher_shows_error(self, qapp, monkeypatch, tmp_path):
@@ -165,5 +180,8 @@ class TestRealign:
 
 
 class _FakeDialog:
+    def __init__(self, molblock_to_apply=None):
+        self.molblock_to_apply = molblock_to_apply
+
     def exec(self):
         return None
