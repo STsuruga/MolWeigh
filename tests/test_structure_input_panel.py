@@ -33,18 +33,18 @@ class TestCalculate:
         monkeypatch.setattr(structure_editor, "_VENDOR_DIR", tmp_path / "missing")
         panel = StructureInputPanel()
         panel._on_calculate()
-        assert not panel._error_label.isHidden()
+        assert panel._error_label.text() != ""
 
     def test_empty_smiles_shows_error(self, qapp):
         panel = StructureInputPanel()
         panel._on_smiles_for_calculate(None)
-        assert not panel._error_label.isHidden()
+        assert panel._error_label.text() != ""
         panel.shutdown()
 
     def test_invalid_smiles_shows_error(self, qapp):
         panel = StructureInputPanel()
         panel._on_smiles_for_calculate("not-a-smiles(((")
-        assert not panel._error_label.isHidden()
+        assert panel._error_label.text() != ""
         panel.shutdown()
 
 
@@ -70,13 +70,13 @@ class TestAddToTable:
         panel._on_smiles_for_add(None)
 
         assert received == []
-        assert not panel._error_label.isHidden()
+        assert panel._error_label.text() != ""
         panel.shutdown()
 
     def test_invalid_smiles_shows_error(self, qapp):
         panel = StructureInputPanel()
         panel._on_smiles_for_add("not-a-smiles(((")
-        assert not panel._error_label.isHidden()
+        assert panel._error_label.text() != ""
         panel.shutdown()
 
 
@@ -95,13 +95,13 @@ class TestPreview3D:
     def test_empty_smiles_shows_error(self, qapp):
         panel = StructureInputPanel()
         panel._on_smiles_for_3d(None)
-        assert not panel._error_label.isHidden()
+        assert panel._error_label.text() != ""
         panel.shutdown()
 
     def test_invalid_smiles_shows_error(self, qapp):
         panel = StructureInputPanel()
         panel._on_smiles_for_3d("not-a-smiles(((")
-        assert not panel._error_label.isHidden()
+        assert panel._error_label.text() != ""
         panel.shutdown()
 
     def test_valid_smiles_opens_dialog(self, qapp, monkeypatch):
@@ -115,14 +115,14 @@ class TestPreview3D:
         panel._on_smiles_for_3d("CCO")
 
         assert len(opened) == 1
-        assert panel._error_label.isHidden()
+        assert panel._error_label.text() == ""
         panel.shutdown()
 
     def test_without_ketcher_shows_error(self, qapp, monkeypatch, tmp_path):
         monkeypatch.setattr(structure_editor, "_VENDOR_DIR", tmp_path / "missing")
         panel = StructureInputPanel()
         panel._on_preview_3d()
-        assert not panel._error_label.isHidden()
+        assert panel._error_label.text() != ""
 
 
 class _FakeDialog:

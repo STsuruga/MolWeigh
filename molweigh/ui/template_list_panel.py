@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import sqlite3
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QFrame, QLabel, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..db import template_repo
 from ..db.template_repo import Template
@@ -30,15 +38,20 @@ class TemplateListPanel(QFrame):
         self._list.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._empty_hint = QLabel("テンプレートを保存すると、ここから呼び出せます。")
         self._empty_hint.setWordWrap(True)
+        self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_hint.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 12px;")
+
+        # 空状態のヒントとリストを同じ領域で切り替える(空の時に下に余白だけが
+        # 残らないよう、ヒントは領域内で中央寄せにする)。
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._empty_hint)
+        self._stack.addWidget(self._list)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(8)
         outer.addWidget(title_label)
-        outer.addWidget(self._empty_hint)
-        outer.addWidget(self._list, 1)
-        self._list.hide()
+        outer.addWidget(self._stack, 1)
 
         self.refresh()
 
@@ -51,8 +64,7 @@ class TemplateListPanel(QFrame):
             item.setToolTip("ダブルクリックでテーブルに呼び出します。")
             self._list.addItem(item)
         has_entries = bool(self._templates)
-        self._list.setVisible(has_entries)
-        self._empty_hint.setVisible(not has_entries)
+        self._stack.setCurrentWidget(self._list if has_entries else self._empty_hint)
 
     def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
         row = self._list.row(item)

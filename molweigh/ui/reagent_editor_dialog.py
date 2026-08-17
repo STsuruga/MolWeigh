@@ -223,7 +223,7 @@ class ReagentEditorDialog(QDialog):
             return
         self._smiles = smiles
         self._formula_input.setText(info.formula or "")
-        self._mw_input.setValue(info.molecular_weight)
+        self._mw_input.setValue(round(info.molecular_weight, 4))
         self._update_preview()
 
     def _on_formula_edited(self) -> None:
@@ -234,7 +234,7 @@ class ReagentEditorDialog(QDialog):
             mw = formula_parser.molecular_weight(text)
         except ValueError:
             return
-        self._mw_input.setValue(mw)
+        self._mw_input.setValue(round(mw, 4))
 
     # --- プレビュー更新 ---------------------------------------------------
 
@@ -248,7 +248,7 @@ class ReagentEditorDialog(QDialog):
         self._preview_name.setText(name)
         _set_info_row(self._preview_formula_row, formula or "—")
         _set_info_row(self._preview_cas_row, cas or "—")
-        _set_info_row(self._preview_mw_row, f"{mw:.4g}" if mw > 0 else "—")
+        _set_info_row(self._preview_mw_row, f"{mw:.2f}" if mw > 0 else "—")
         _set_info_row(self._preview_density_row, f"{density:.4g}" if density > 0 else "—")
 
         if self._smiles:

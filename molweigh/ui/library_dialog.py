@@ -31,9 +31,11 @@ from ..db import library_repo
 from ..db.library_repo import LibraryEntry
 from . import theme
 
-_CARD_WIDTH = 116
+_CARD_WIDTH = 138
+_CARD_HEIGHT = 240
 _CARD_SPACING = 10
-_STRUCTURE_IMAGE_SIZE = (88, 68)
+_STRUCTURE_IMAGE_SIZE = (110, 85)
+_NAME_LABEL_HEIGHT = 36
 
 
 class _ResizingScrollArea(QScrollArea):
@@ -172,7 +174,7 @@ class _LibraryCard(QFrame):
     def __init__(self, entry: LibraryEntry, parent: QWidget | None = None):
         super().__init__(parent)
         self._entry = entry
-        self.setFixedWidth(_CARD_WIDTH)
+        self.setFixedSize(_CARD_WIDTH, _CARD_HEIGHT)
         self.setStyleSheet(theme.card_frame_style("_LibraryCard"))
 
         layout = QVBoxLayout(self)
@@ -190,8 +192,9 @@ class _LibraryCard(QFrame):
         layout.addWidget(self._image_label)
 
         name_label = QLabel(entry.name)
-        name_label.setStyleSheet(f"font-weight: 600; font-size: 11px; color: {theme.TEXT_PRIMARY};")
-        name_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        name_label.setFixedHeight(_NAME_LABEL_HEIGHT)
+        name_label.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {theme.TEXT_PRIMARY};")
+        name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         name_label.setWordWrap(True)
         layout.addWidget(name_label)
 
@@ -201,7 +204,7 @@ class _LibraryCard(QFrame):
         info_layout.setSpacing(1)
         info_layout.addWidget(_compact_info_row("化学式", entry.formula or "—"))
         info_layout.addWidget(_compact_info_row("CAS", entry.cas_number or "—"))
-        info_layout.addWidget(_compact_info_row("分子量", f"{entry.molecular_weight:.4g}"))
+        info_layout.addWidget(_compact_info_row("分子量", f"{entry.molecular_weight:.2f}"))
         info_layout.addWidget(
             _compact_info_row("比重", f"{entry.density:.4g}" if entry.density is not None else "—")
         )
@@ -247,14 +250,14 @@ def _info_row(label: str, value: str) -> QWidget:
 
 
 def _compact_info_row(label: str, value: str) -> QWidget:
-    """コンパクトなライブラリカード向けの、一回り小さいフォントの情報行。"""
+    """コンパクトなライブラリカード向けの情報行。"""
     row = QWidget()
     row_layout = QHBoxLayout(row)
     row_layout.setContentsMargins(0, 0, 0, 0)
     label_widget = QLabel(label)
-    label_widget.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 9px;")
+    label_widget.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 11px;")
     value_widget = QLabel(value)
-    value_widget.setStyleSheet(f"color: {theme.TEXT_PRIMARY}; font-size: 10px; font-weight: 500;")
+    value_widget.setStyleSheet(f"color: {theme.TEXT_PRIMARY}; font-size: 12px; font-weight: 500;")
     row_layout.addWidget(label_widget)
     row_layout.addStretch()
     row_layout.addWidget(value_widget)
@@ -262,15 +265,15 @@ def _compact_info_row(label: str, value: str) -> QWidget:
 
 
 def _compact_button_style(background: str, color: str, hover_background: str) -> str:
-    """コンパクトなライブラリカード向けの、一回り小さいパディングのボタンスタイル。"""
+    """コンパクトなライブラリカード向けのボタンスタイル。"""
     return f"""
         QPushButton {{
             background: {background};
             color: {color};
             border: 1px solid {theme.BORDER_STRONG if background == "transparent" else "transparent"};
             border-radius: 6px;
-            padding: 3px 4px;
-            font-size: 10px;
+            padding: 4px 6px;
+            font-size: 12px;
         }}
         QPushButton:hover {{ background: {hover_background}; }}
     """

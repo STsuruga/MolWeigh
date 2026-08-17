@@ -56,7 +56,7 @@ def resolve_compound(conn: sqlite3.Connection, query: str) -> CompoundInfo | Non
 
 def resolve_from_formula(formula: str) -> CompoundInfo:
     """化学式文字列から分子量を算出する(ライブラリへの自動保存はしない)。"""
-    weight = formula_parser.molecular_weight(formula)
+    weight = round(formula_parser.molecular_weight(formula), 4)
     return CompoundInfo(
         name=formula,
         formula=formula,
@@ -73,7 +73,7 @@ def resolve_from_smiles(smiles: str) -> CompoundInfo:
     return CompoundInfo(
         name=smiles,
         formula=info.formula,
-        molecular_weight=info.molecular_weight,
+        molecular_weight=round(info.molecular_weight, 4),
         density=None,
         smiles=smiles,
         source="smiles",
@@ -122,7 +122,7 @@ def _resolve_from_pubchem(query: str) -> CompoundInfo | None:
     return CompoundInfo(
         name=query,
         formula=result.formula,
-        molecular_weight=result.molecular_weight,
+        molecular_weight=round(result.molecular_weight, 4),
         density=result.density,
         smiles=result.smiles,
         source="pubchem",

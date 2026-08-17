@@ -16,6 +16,8 @@ from .molecule_3d_viewer import Molecule3DDialog
 from .structure_editor import KetcherNotBundledError, KetcherView
 
 _SIDE_COLUMN_WIDTH = 150
+_INFO_FRAME_HEIGHT = 100
+_ERROR_LABEL_HEIGHT = 48
 
 
 class StructureInputPanel(QFrame):
@@ -41,7 +43,7 @@ class StructureInputPanel(QFrame):
             self._ketcher_container.addWidget(QLabel(str(exc)))
 
         info_frame = QFrame()
-        info_frame.setMaximumWidth(_SIDE_COLUMN_WIDTH)
+        info_frame.setFixedSize(_SIDE_COLUMN_WIDTH, _INFO_FRAME_HEIGHT)
         info_frame.setStyleSheet(
             f"QFrame {{ background: {theme.ACCENT_BG}; border-radius: {theme.RADIUS}px; }}"
         )
@@ -57,6 +59,7 @@ class StructureInputPanel(QFrame):
         info_layout.setSpacing(6)
         info_layout.addWidget(self._mw_label)
         info_layout.addWidget(self._formula_label)
+        info_layout.addStretch(1)
 
         self._calc_button = QPushButton("分子量を計算")
         self._calc_button.setMaximumWidth(_SIDE_COLUMN_WIDTH)
@@ -74,11 +77,13 @@ class StructureInputPanel(QFrame):
         )
         self._preview_3d_button.clicked.connect(self._on_preview_3d)
 
+        # 固定サイズで常時レイアウトに存在させる(表示/非表示を切り替えると
+        # エラーの有無でボタン位置がずれてしまうため、テキストの有無だけを切り替える)。
         self._error_label = QLabel("")
-        self._error_label.setMaximumWidth(_SIDE_COLUMN_WIDTH)
+        self._error_label.setFixedSize(_SIDE_COLUMN_WIDTH, _ERROR_LABEL_HEIGHT)
         self._error_label.setWordWrap(True)
+        self._error_label.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._error_label.setStyleSheet(f"color: {theme.DANGER_TEXT};")
-        self._error_label.hide()
 
         side_column = QVBoxLayout()
         side_column.setSpacing(10)
@@ -103,7 +108,7 @@ class StructureInputPanel(QFrame):
         if self._ketcher is None:
             self._show_error("構造式エディタが利用できません。")
             return
-        self._error_label.hide()
+        self._error_label.setText("")
         self._ketcher.get_smiles(self._on_smiles_for_calculate)
 
     def _on_smiles_for_calculate(self, smiles: str | None) -> None:
@@ -115,7 +120,7 @@ class StructureInputPanel(QFrame):
         if self._ketcher is None:
             self._show_error("構造式エディタが利用できません。")
             return
-        self._error_label.hide()
+        self._error_label.setText("")
         self._ketcher.get_smiles(self._on_smiles_for_add)
 
     def _on_smiles_for_add(self, smiles: str | None) -> None:
@@ -128,7 +133,7 @@ class StructureInputPanel(QFrame):
         if self._ketcher is None:
             self._show_error("構造式エディタが利用できません。")
             return
-        self._error_label.hide()
+        self._error_label.setText("")
         self._ketcher.get_smiles(self._on_smiles_for_3d)
 
     def _on_smiles_for_3d(self, smiles: str | None) -> None:
@@ -154,11 +159,10 @@ class StructureInputPanel(QFrame):
 
     def _update_info_labels(self, info) -> None:
         self._formula_label.setText(f"化学式: {info.formula or '—'}")
-        self._mw_label.setText(f"分子量: {info.molecular_weight:.4g}")
+        self._mw_label.setText(f"分子量: {info.molecular_weight:.2f}")
 
     def _show_error(self, message: str) -> None:
         self._error_label.setText(message)
-        self._error_label.show()
 
     def shutdown(self) -> None:
         """メインウィンドウを閉じる際に呼び、Ketcherのローカルサーバーを止める。"""

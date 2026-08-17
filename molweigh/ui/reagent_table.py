@@ -258,7 +258,7 @@ class ReagentTableWidget(QWidget):
                 value = None
 
         if row == ROW_FW:
-            column.fw = value
+            column.fw = round(value, 4) if value is not None else None
         elif row == ROW_DENSITY:
             column.density = value
         elif row == ROW_VOLUME:
@@ -415,7 +415,7 @@ class ReagentTableWidget(QWidget):
     def _render_data_rows(
         self, table_col: int, index: int, column: ReagentColumn, result: ComputedResult
     ) -> None:
-        self._set_cell(table_col, ROW_FW, _fmt(column.fw), editable=True)
+        self._set_cell(table_col, ROW_FW, _fmt_fw(column.fw), editable=True)
         self._set_cell(table_col, ROW_WEIGHT, _fmt(column.weight_value), editable=True)
         self._set_cell(table_col, ROW_DENSITY, _fmt(column.density), editable=True)
         self._set_cell(table_col, ROW_VOLUME, _fmt(column.volume_ml), editable=True)
@@ -441,6 +441,13 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return ""
     return f"{value:.4g}"
+
+
+def _fmt_fw(value: float | None) -> str:
+    """分子量(Fw)は小数点以下2桁で表示する(内部の計算値は4桁精度のまま)。"""
+    if value is None:
+        return ""
+    return f"{value:.2f}"
 
 
 def _set_thumbnail(label: QLabel, column: ReagentColumn) -> None:
