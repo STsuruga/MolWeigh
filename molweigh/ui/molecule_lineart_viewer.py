@@ -8,14 +8,22 @@ ChemDrawの3D構造表示と同じ原理 ― 3D原子座標を2Dへ正射影し�
 交差判定・ギャップ計算)と描画・マウス操作はすべてJavaScript側で完結させる
 (Python⇔JS間の往復を発生させない)。
 
-外部ライブラリではなく自前実装のJSのため、Ketcher/3Dmol.jsのような
-ローカルHTTPサーバー経由の配信は不要で、生成したHTMLにスクリプトを直接
-埋め込んで `QWebEngineView.setHtml()` で読み込む。
+外部ライブラリではなく自前実装のJSのため、Ketcherのような外部ビルド成果物の
+配置は不要だが、QWebEngineViewでの読み込み方式自体はKetcherと同じ
+「ローカルHTTPサーバーを一時的に起動してload()する」方式に合わせている。
+`setHtml()`(baseUrl付き)でも動作するはずだが、実機で「ウィンドウは開くが
+完全に白紙(読み込み中の表示すら出ない)」という、こちらでは再現できない
+報告があり、確実に動作が確認できているKetcherと全く同じ読み込み経路に
+揃えることで回避を試みている。
 """
 
 from __future__ import annotations
 
+import http.server
 import json
+import tempfile
+import threading
+from pathlib import Path
 
 from PySide6.QtCore import QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -24,12 +32,10 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLa
 from ..core.structure import LineArtMolecule, build_molblock_from_lineart_layout
 from . import theme
 
-# setHtml()にbaseUrlを渡さないと、環境によってはnull origin(opaque origin)
-# 扱いとなり、実行時のセキュリティ制限が変わって描画やスクリプト実行に
-# 影響することがある(実機で「ウィンドウは開くが完全に白紙」という報告あり)。
-# 実際に存在するサーバーである必要はなく、安定したoriginを与えるためだけの
-# ダミーURL。
-_BASE_URL = QUrl("https://molweigh.invalid/")
+
+class _QuietRequestHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format: str, *args) -> None:  # noqa: A002
+        pass
 
 # --- 幾何処理(回転・正射影・線分交差判定・隠線ギャップ計算)+ 描画 + マウス操作 ---
 # クォータニオンで回転を保持することでジンバルロックを避ける。マウスドラッグの
@@ -295,12 +301,27 @@ class MoleculeLineArtWebView(QWidget):
         )
         html = _HTML_TEMPLATE.format(atoms_json=atoms_json, bonds_json=bonds_json, lineart_js=_LINEART_JS)
 
+        self._tmp_dir = tempfile.TemporaryDirectory(prefix="molweigh_lineart_")
+        (Path(self._tmp_dir.name) / "index.html").write_text(html, encoding="utf-8")
+
+        self._server = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            lambda *args: _QuietRequestHandler(*args, directory=self._tmp_dir.name),
+        )
+        self._server_thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._server_thread.start()
+        port = self._server.server_address[1]
+
         self._view = QWebEngineView(self)
-        self._view.setHtml(html, _BASE_URL)
+        self._view.load(QUrl(f"http://127.0.0.1:{port}/index.html"))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._view)
+
+    def shutdown(self) -> None:
+        self._server.shutdown()
+        self._tmp_dir.cleanup()
 
 
 class MoleculeLineArtWebDialog(QDialog):
@@ -358,3 +379,7 @@ class MoleculeLineArtWebDialog(QDialog):
         layout = [(pt[0], pt[1]) for pt in json.loads(value)]
         self.molblock_to_apply = build_molblock_from_lineart_layout(self._smiles, layout)
         self.accept()
+
+    def done(self, result: int) -> None:
+        self._view.shutdown()
+        super().done(result)

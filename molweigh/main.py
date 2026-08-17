@@ -11,6 +11,12 @@ import sys
 # 設定しておく必要があるため、他のインポートより先にここで行う。
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu-compositing")
 
+# デバッグ用: 通常のブラウザから http://127.0.0.1:9223 を開くと、アプリ内の
+# QWebEngineView(Ketcher・3Dプレビュー等)の中身をChrome DevTools相当の
+# 画面で直接調査できる(コンソールエラー・DOM状態などを実機で確認するため)。
+# 原因調査が終わったら削除してよい一時的な設定。
+os.environ.setdefault("QTWEBENGINE_REMOTE_DEBUGGING", "9223")
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
