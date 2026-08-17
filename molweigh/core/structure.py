@@ -56,6 +56,23 @@ def render_structure_image(smiles: str, size: tuple[int, int] = (300, 300)) -> Q
     return QPixmap.fromImage(qimage.copy())
 
 
+def realign_bridged_structure_molblock(smiles: str) -> str | None:
+    """橋かけ構造(bridgehead原子を持つ)の場合のみ、3D投影レイアウトのMOLブロックを返す。
+
+    Ketcherの2D自動レイアウトは橋かけ構造をうまく描けないことがあるが、
+    Ketcher自身の描画アルゴリズムは外部から差し替えられない。その代わり、
+    Ketcherの `setMolecule()` はMOLブロックの座標をそのまま尊重して表示する
+    ため、こちらで計算した見やすいレイアウトをMOLブロックとして渡すことで、
+    Ketcherのキャンバス上に反映できる。橋かけ構造でない場合は整列が不要
+    なのでNoneを返す。
+    """
+    mol = _mol_from_smiles(smiles)
+    if rdMolDescriptors.CalcNumBridgeheadAtoms(mol) == 0:
+        return None
+    projected = _project_3d_to_2d(smiles)
+    return Chem.MolToMolBlock(projected)
+
+
 def _project_3d_to_2d(smiles: str) -> Chem.Mol:
     """3D配座のXY座標をそのまま2Dレイアウトとして流用したMolを作る。"""
     mol_3d = structure_3d.embed_and_optimize(smiles)

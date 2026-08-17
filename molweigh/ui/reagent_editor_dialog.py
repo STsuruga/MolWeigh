@@ -144,9 +144,14 @@ class ReagentEditorDialog(QDialog):
         )
         preview_3d_button.clicked.connect(self._on_preview_3d)
 
+        realign_button = QPushButton("橋かけ構造を整列")
+        realign_button.setToolTip("トリプチセンのような橋かけ構造を、重なりにくい向きに描き直します")
+        realign_button.clicked.connect(self._on_realign)
+
         structure_button_row = QHBoxLayout()
         structure_button_row.addWidget(apply_structure_button)
         structure_button_row.addWidget(preview_3d_button)
+        structure_button_row.addWidget(realign_button)
 
         self._name_input = QLineEdit()
         self._name_input.setPlaceholderText("入力")
@@ -211,6 +216,26 @@ class ReagentEditorDialog(QDialog):
             QMessageBox.warning(self, "3Dプレビュー", str(exc))
             return
         Molecule3DDialog(molecule, self).exec()
+
+    def _on_realign(self) -> None:
+        if self._ketcher is None:
+            QMessageBox.warning(self, "橋かけ構造を整列", "構造式エディタが利用できません。")
+            return
+        self._ketcher.get_smiles(self._on_smiles_for_realign)
+
+    def _on_smiles_for_realign(self, smiles: str | None) -> None:
+        if not smiles:
+            QMessageBox.warning(self, "橋かけ構造を整列", "構造式が空です。原子を配置してください。")
+            return
+        try:
+            molblock = structure.realign_bridged_structure_molblock(smiles)
+        except ValueError as exc:
+            QMessageBox.warning(self, "橋かけ構造を整列", str(exc))
+            return
+        if molblock is None:
+            QMessageBox.information(self, "橋かけ構造を整列", "橋かけ構造ではないため、整列は不要です。")
+            return
+        self._ketcher.set_smiles(molblock)
 
     def _on_smiles_received(self, smiles: str | None) -> None:
         if not smiles:

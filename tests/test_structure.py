@@ -2,7 +2,13 @@ import numpy as np
 import pytest
 
 from molweigh.core import structure_3d
-from molweigh.core.structure import _min_pairwise_distance_2d, _orient_canonically, parse_smiles, render_structure_image
+from molweigh.core.structure import (
+    _min_pairwise_distance_2d,
+    _orient_canonically,
+    parse_smiles,
+    realign_bridged_structure_molblock,
+    render_structure_image,
+)
 
 
 class TestParseSmiles:
@@ -42,6 +48,27 @@ class TestRenderStructureImage:
     def test_non_bridged_structure_unaffected(self, qapp):
         pixmap = render_structure_image("c1ccccc1", size=(200, 200))
         assert not pixmap.isNull()
+
+
+class TestRealignBridgedStructureMolblock:
+    def test_non_bridged_returns_none(self, qapp):
+        assert realign_bridged_structure_molblock("CCO") is None
+
+    def test_bridged_returns_molblock_with_matching_atom_count(self, qapp):
+        triptycene = "c1ccc2c(c1)C1c3ccccc3C2c2ccccc21"
+        molblock = realign_bridged_structure_molblock(triptycene)
+        assert molblock is not None
+        assert "V2000" in molblock
+
+        from rdkit import Chem
+
+        reloaded = Chem.MolFromMolBlock(molblock)
+        assert reloaded is not None
+        assert reloaded.GetNumAtoms() == Chem.MolFromSmiles(triptycene).GetNumAtoms()
+
+    def test_invalid_smiles_raises(self, qapp):
+        with pytest.raises(ValueError):
+            realign_bridged_structure_molblock("not-a-smiles(((")
 
 
 class TestOrientCanonically:

@@ -87,6 +87,33 @@ class TestPreview3D:
         assert len(opened) == 1
 
 
+class TestRealign:
+    def test_empty_smiles_shows_warning(self, dialog, monkeypatch):
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+        dialog._on_smiles_for_realign(None)
+        assert warnings
+
+    def test_invalid_smiles_shows_warning(self, dialog, monkeypatch):
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+        dialog._on_smiles_for_realign("not-a-smiles(((")
+        assert warnings
+
+    def test_non_bridged_shows_information(self, dialog, monkeypatch):
+        infos = []
+        monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: infos.append(a))
+        dialog._on_smiles_for_realign("CCO")
+        assert infos
+
+    def test_bridged_smiles_loads_molblock_into_ketcher(self, dialog, monkeypatch):
+        received = []
+        monkeypatch.setattr(dialog._ketcher, "set_smiles", lambda text: received.append(text))
+        dialog._on_smiles_for_realign("c1ccc2c(c1)C1c3ccccc3C2c2ccccc21")
+        assert len(received) == 1
+        assert "V2000" in received[0]
+
+
 class _FakeDialog:
     def exec(self):
         return None

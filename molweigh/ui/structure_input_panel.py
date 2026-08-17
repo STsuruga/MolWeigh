@@ -10,7 +10,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ..core import compound_source, structure_3d
+from ..core import compound_source, structure, structure_3d
 from . import theme
 from .molecule_3d_viewer import Molecule3DDialog
 from .structure_editor import KetcherNotBundledError, KetcherView
@@ -77,6 +77,13 @@ class StructureInputPanel(QFrame):
         )
         self._preview_3d_button.clicked.connect(self._on_preview_3d)
 
+        self._realign_button = QPushButton("橋かけ構造を整列")
+        self._realign_button.setMaximumWidth(_SIDE_COLUMN_WIDTH)
+        self._realign_button.setToolTip(
+            "トリプチセンのような橋かけ構造を、重なりにくい向きに描き直します"
+        )
+        self._realign_button.clicked.connect(self._on_realign)
+
         # 固定サイズで常時レイアウトに存在させる(表示/非表示を切り替えると
         # エラーの有無でボタン位置がずれてしまうため、テキストの有無だけを切り替える)。
         self._error_label = QLabel("")
@@ -92,6 +99,7 @@ class StructureInputPanel(QFrame):
         side_column.addStretch(1)
         side_column.addWidget(self._calc_button)
         side_column.addWidget(self._preview_3d_button)
+        side_column.addWidget(self._realign_button)
         side_column.addWidget(self._add_button)
 
         content_row = QHBoxLayout()
@@ -146,6 +154,27 @@ class StructureInputPanel(QFrame):
             self._show_error(str(exc))
             return
         Molecule3DDialog(molecule, self).exec()
+
+    def _on_realign(self) -> None:
+        if self._ketcher is None:
+            self._show_error("構造式エディタが利用できません。")
+            return
+        self._error_label.setText("")
+        self._ketcher.get_smiles(self._on_smiles_for_realign)
+
+    def _on_smiles_for_realign(self, smiles: str | None) -> None:
+        if not smiles:
+            self._show_error("構造式が空です。原子を配置してください。")
+            return
+        try:
+            molblock = structure.realign_bridged_structure_molblock(smiles)
+        except ValueError as exc:
+            self._show_error(str(exc))
+            return
+        if molblock is None:
+            self._show_error("橋かけ構造ではないため、整列は不要です。")
+            return
+        self._ketcher.set_smiles(molblock)
 
     def _resolve_smiles(self, smiles: str | None):
         if not smiles:

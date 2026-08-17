@@ -125,6 +125,44 @@ class TestPreview3D:
         assert panel._error_label.text() != ""
 
 
+class TestRealign:
+    def test_empty_smiles_shows_error(self, qapp):
+        panel = StructureInputPanel()
+        panel._on_smiles_for_realign(None)
+        assert panel._error_label.text() != ""
+        panel.shutdown()
+
+    def test_invalid_smiles_shows_error(self, qapp):
+        panel = StructureInputPanel()
+        panel._on_smiles_for_realign("not-a-smiles(((")
+        assert panel._error_label.text() != ""
+        panel.shutdown()
+
+    def test_non_bridged_shows_not_needed_message(self, qapp):
+        panel = StructureInputPanel()
+        panel._on_smiles_for_realign("CCO")
+        assert panel._error_label.text() != ""
+        panel.shutdown()
+
+    def test_bridged_smiles_loads_molblock_into_ketcher(self, qapp, monkeypatch):
+        panel = StructureInputPanel()
+        received = []
+        monkeypatch.setattr(panel._ketcher, "set_smiles", lambda text: received.append(text))
+
+        panel._on_smiles_for_realign("c1ccc2c(c1)C1c3ccccc3C2c2ccccc21")
+
+        assert len(received) == 1
+        assert "V2000" in received[0]
+        assert panel._error_label.text() == ""
+        panel.shutdown()
+
+    def test_without_ketcher_shows_error(self, qapp, monkeypatch, tmp_path):
+        monkeypatch.setattr(structure_editor, "_VENDOR_DIR", tmp_path / "missing")
+        panel = StructureInputPanel()
+        panel._on_realign()
+        assert panel._error_label.text() != ""
+
+
 class _FakeDialog:
     def exec(self):
         return None
