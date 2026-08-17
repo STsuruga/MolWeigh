@@ -153,9 +153,38 @@ class TestManualCompoundDialogDrawStructure:
         monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
 
         dialog = ManualCompoundDialog("x")
-        dialog._on_draw_structure()
+        dialog._on_draw_button_clicked()
 
         assert warnings
+
+    def test_auto_open_fires_on_show_without_warning(self, qapp, monkeypatch):
+        def raise_not_bundled(parent=None):
+            raise compound_search.KetcherNotBundledError("not bundled")
+
+        monkeypatch.setattr(compound_search, "StructureEditorDialog", raise_not_bundled)
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+
+        ManualCompoundDialog("x")
+        qapp.processEvents()
+
+        assert warnings == []
+
+    def test_auto_open_fills_smiles_when_ketcher_available(self, qapp, monkeypatch):
+        class FakeEditor:
+            def __init__(self, parent=None):
+                self.smiles = "CCO"
+
+            def exec(self):
+                return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(compound_search, "StructureEditorDialog", FakeEditor)
+
+        dialog = ManualCompoundDialog("x")
+        qapp.processEvents()
+
+        assert dialog._mode.currentIndex() == 1
+        assert dialog._input.text() == "CCO"
 
     def test_accepted_drawing_fills_smiles_mode(self, qapp, monkeypatch):
         class FakeEditor:
@@ -168,7 +197,7 @@ class TestManualCompoundDialogDrawStructure:
         monkeypatch.setattr(compound_search, "StructureEditorDialog", FakeEditor)
 
         dialog = ManualCompoundDialog("x")
-        dialog._on_draw_structure()
+        dialog._on_draw_button_clicked()
 
         assert dialog._mode.currentIndex() == 1
         assert dialog._input.text() == "CCO"
@@ -185,6 +214,6 @@ class TestManualCompoundDialogDrawStructure:
 
         dialog = ManualCompoundDialog("x")
         dialog._input.setText("original")
-        dialog._on_draw_structure()
+        dialog._on_draw_button_clicked()
 
         assert dialog._input.text() == "original"

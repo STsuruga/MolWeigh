@@ -16,9 +16,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core import compound_source
 from ..core.compound_source import CompoundInfo
 from ..db import library_repo, template_repo
+from ..db.library_repo import LibraryEntry
 from .compound_search import CompoundSearchBar
+from .library_dialog import LibraryDialog
 from .reagent_table import ReagentColumn, ReagentTableWidget
 from .structure_panel import StructurePanel
 
@@ -36,11 +39,16 @@ class MainWindow(QMainWindow):
 
         self._reagent_table = ReagentTableWidget()
         self._reagent_table.column_selected.connect(self._on_column_selected)
-        self._reagent_table.add_reagent_requested.connect(self._search_bar._input.setFocus)
+        self._reagent_table.add_reagent_requested.connect(self._on_add_reagent_requested)
+        self._reagent_table.save_requested.connect(self._on_save_column_requested)
         for _ in range(DEFAULT_COLUMN_COUNT):
             self._reagent_table.add_column(ReagentColumn())
 
         self._structure_panel = StructurePanel()
+        self._library_dialog: LibraryDialog | None = None
+
+        library_button = QPushButton("ライブラリ")
+        library_button.clicked.connect(self._on_open_library)
 
         self._template_combo = QComboBox()
         load_button = QPushButton("読込")
@@ -51,6 +59,7 @@ class MainWindow(QMainWindow):
         toolbar_layout = QHBoxLayout()
         toolbar_layout.addWidget(QLabel("当量計算"))
         toolbar_layout.addStretch()
+        toolbar_layout.addWidget(library_button)
         toolbar_layout.addWidget(self._template_combo)
         toolbar_layout.addWidget(load_button)
         toolbar_layout.addWidget(save_button)
@@ -69,7 +78,49 @@ class MainWindow(QMainWindow):
         self._refresh_template_combo()
 
     def _on_compound_resolved(self, info: CompoundInfo) -> None:
-        column = _compound_info_to_column(info)
+        self._add_or_fill_column(_compound_info_to_column(info))
+
+    def _on_add_reagent_requested(self) -> None:
+        self._reagent_table.add_column(ReagentColumn())
+
+    def _on_save_column_requested(self, index: int) -> None:
+        columns = self._reagent_table.columns()
+        if not (0 <= index < len(columns)):
+            return
+        column = columns[index]
+        if column.fw is None:
+            QMessageBox.warning(self, "保存できません", "Fw(分子量)が未設定です。")
+            return
+
+        name, ok = QInputDialog.getText(self, "ライブラリに保存", "試薬名:", text=column.name or "")
+        if not ok or not name.strip():
+            return
+
+        info = CompoundInfo(
+            name=name.strip(),
+            formula=column.formula,
+            molecular_weight=column.fw,
+            density=column.density,
+            smiles=column.smiles,
+            source=column.source,
+        )
+        column.library_id = compound_source.save_to_library(self._conn, info)
+        column.name = name.strip()
+        self._reagent_table.replace_column(index, column)
+
+    def _on_open_library(self) -> None:
+        if self._library_dialog is None:
+            self._library_dialog = LibraryDialog(self._conn, self)
+            self._library_dialog.entry_selected.connect(self._on_library_entry_selected)
+        self._library_dialog.refresh()
+        self._library_dialog.show()
+        self._library_dialog.raise_()
+        self._library_dialog.activateWindow()
+
+    def _on_library_entry_selected(self, entry: LibraryEntry) -> None:
+        self._add_or_fill_column(_library_entry_to_column(entry))
+
+    def _add_or_fill_column(self, column: ReagentColumn) -> None:
         blank_index = self._reagent_table.first_blank_column_index()
         if blank_index is not None:
             self._reagent_table.replace_column(blank_index, column)
@@ -104,15 +155,7 @@ class MainWindow(QMainWindow):
             if entry is None:
                 missing += 1
                 continue
-            column = ReagentColumn(
-                name=entry.name,
-                formula=entry.formula,
-                smiles=entry.smiles,
-                source=entry.source,
-                library_id=entry.id,
-                fw=entry.molecular_weight,
-                density=entry.density,
-            )
+            column = _library_entry_to_column(entry)
             if reagent.get("role") != "base":
                 column.target_eq = reagent.get("eq")
             self._reagent_table.add_column(column)
@@ -170,4 +213,16 @@ def _compound_info_to_column(info: CompoundInfo) -> ReagentColumn:
         library_id=info.library_id,
         fw=info.molecular_weight,
         density=info.density,
+    )
+
+
+def _library_entry_to_column(entry: LibraryEntry) -> ReagentColumn:
+    return ReagentColumn(
+        name=entry.name,
+        formula=entry.formula,
+        smiles=entry.smiles,
+        source=entry.source,
+        library_id=entry.id,
+        fw=entry.molecular_weight,
+        density=entry.density,
     )

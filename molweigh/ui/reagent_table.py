@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QComboBox,
     QLabel,
     QPushButton,
     QTableWidget,
@@ -25,10 +26,12 @@ from PySide6.QtWidgets import (
 
 from ..core import calc
 
-ROW_LABELS = ["Fw", "weight(mg)", "d(g/cm3)", "volume(mL)", "molarity(M)", "mmol", "eq"]
+ROW_LABELS = ["Fw", "weight", "d(g/cm3)", "volume(mL)", "molarity(M)", "mmol", "eq"]
 HEADER_ROW = 0
 # データ行は1始まり(row 0はヘッダー行のため)
 (ROW_FW, ROW_WEIGHT, ROW_DENSITY, ROW_VOLUME, ROW_MOLARITY, ROW_MMOL, ROW_EQ) = range(1, len(ROW_LABELS) + 1)
+
+WEIGHT_UNITS = ("mg", "g")
 
 
 @dataclass
@@ -41,7 +44,8 @@ class ReagentColumn:
     fw: float | None = None
     density: float | None = None
     molarity: float | None = None
-    weight_mg: float | None = None
+    weight_value: float | None = None
+    weight_unit: str = "mg"
     volume_ml: float | None = None
     target_eq: float | None = None
     weight_is_actual: bool = False
@@ -61,8 +65,8 @@ def recompute_all(columns: list[ReagentColumn]) -> list[ComputedResult]:
 
     base = columns[0]
     base_mmol = None
-    if base.fw and base.weight_mg:
-        base_mmol = calc.calc_base_mmol(base.fw, base.weight_mg, "mg")
+    if base.fw and base.weight_value:
+        base_mmol = calc.calc_base_mmol(base.fw, base.weight_value, base.weight_unit)
     results = [ComputedResult(mmol=base_mmol, eq=1.0 if base_mmol is not None else None, is_actual=True)]
 
     for col in columns[1:]:
@@ -76,15 +80,15 @@ def _recompute_column(col: ReagentColumn, base_mmol: float | None) -> ComputedRe
         eq = calc.calc_actual_eq(mmol, base_mmol) if base_mmol else None
         return ComputedResult(mmol=mmol, eq=eq, is_actual=True)
 
-    if col.weight_is_actual and col.weight_mg is not None and col.fw:
-        mmol = calc.calc_actual_mmol(col.fw, weight=col.weight_mg, weight_unit="mg")
+    if col.weight_is_actual and col.weight_value is not None and col.fw:
+        mmol = calc.calc_actual_mmol(col.fw, weight=col.weight_value, weight_unit=col.weight_unit)
         eq = calc.calc_actual_eq(mmol, base_mmol) if base_mmol else None
         return ComputedResult(mmol=mmol, eq=eq, is_actual=True)
 
     if col.target_eq is not None and base_mmol is not None:
         mmol = calc.calc_target_mmol(base_mmol, col.target_eq)
         if col.fw:
-            col.weight_mg = calc.calc_required_weight(col.fw, mmol, "mg")
+            col.weight_value = calc.calc_required_weight(col.fw, mmol, col.weight_unit)
         return ComputedResult(mmol=mmol, eq=col.target_eq, is_actual=False)
 
     return ComputedResult(mmol=None, eq=col.target_eq, is_actual=False)
@@ -101,6 +105,7 @@ class ReagentTableWidget(QWidget):
     column_selected = Signal(int)
     add_reagent_requested = Signal()
     columns_changed = Signal()
+    save_requested = Signal(int)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -109,7 +114,7 @@ class ReagentTableWidget(QWidget):
         self._table = QTableWidget(len(ROW_LABELS) + 1, 1, self)
         self._table.horizontalHeader().hide()
         self._table.verticalHeader().hide()
-        self._table.setRowHeight(HEADER_ROW, 130)
+        self._table.setRowHeight(HEADER_ROW, 165)
         self._table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked | QTableWidget.EditTrigger.EditKeyPressed)
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.currentCellChanged.connect(self._on_current_cell_changed)
@@ -182,7 +187,9 @@ class ReagentTableWidget(QWidget):
             except ValueError:
                 value = None
 
-        if row == ROW_DENSITY:
+        if row == ROW_FW:
+            column.fw = value
+        elif row == ROW_DENSITY:
             column.density = value
         elif row == ROW_VOLUME:
             column.volume_ml = value
@@ -191,7 +198,7 @@ class ReagentTableWidget(QWidget):
         elif row == ROW_MOLARITY:
             column.molarity = value
         elif row == ROW_WEIGHT:
-            column.weight_mg = value
+            column.weight_value = value
             if index > 0:
                 column.weight_is_actual = value is not None
                 if value is not None:
@@ -201,6 +208,20 @@ class ReagentTableWidget(QWidget):
             column.weight_is_actual = False
             column.volume_ml = None
 
+        self._rebuild()
+
+    def _on_weight_unit_changed(self, index: int, new_unit: str) -> None:
+        if not (0 <= index < len(self._columns)):
+            return
+        column = self._columns[index]
+        if new_unit == column.weight_unit:
+            return
+        if column.weight_value is not None:
+            if column.weight_unit == "mg" and new_unit == "g":
+                column.weight_value /= 1000
+            elif column.weight_unit == "g" and new_unit == "mg":
+                column.weight_value *= 1000
+        column.weight_unit = new_unit
         self._rebuild()
 
     def _rebuild(self) -> None:
@@ -256,10 +277,23 @@ class ReagentTableWidget(QWidget):
         formula_label.setStyleSheet("color: #888780; font-size: 11px;")
         layout.addWidget(formula_label)
 
-        if column.library_id is None:
+        if column.library_id is None and (column.name or column.fw is not None):
             unsaved_label = QLabel("未保存")
             unsaved_label.setStyleSheet("color: #BA7517; font-size: 10px;")
             layout.addWidget(unsaved_label)
+
+            save_button = QPushButton("保存")
+            save_button.clicked.connect(lambda _=False, i=index: self.save_requested.emit(i))
+            layout.addWidget(save_button)
+
+        weight_unit_combo = QComboBox()
+        weight_unit_combo.addItems(list(WEIGHT_UNITS))
+        weight_unit_combo.setCurrentText(column.weight_unit)
+        weight_unit_combo.setFixedWidth(55)
+        weight_unit_combo.currentTextChanged.connect(
+            lambda unit, i=index: self._on_weight_unit_changed(i, unit)
+        )
+        layout.addWidget(weight_unit_combo)
 
         delete_button = QPushButton("×")
         delete_button.setFixedWidth(20)
@@ -273,8 +307,8 @@ class ReagentTableWidget(QWidget):
     def _render_data_rows(
         self, table_col: int, index: int, column: ReagentColumn, result: ComputedResult
     ) -> None:
-        self._set_cell(table_col, ROW_FW, _fmt(column.fw), editable=False)
-        self._set_cell(table_col, ROW_WEIGHT, _fmt(column.weight_mg), editable=True)
+        self._set_cell(table_col, ROW_FW, _fmt(column.fw), editable=True)
+        self._set_cell(table_col, ROW_WEIGHT, _fmt(column.weight_value), editable=True)
         self._set_cell(table_col, ROW_DENSITY, _fmt(column.density), editable=True)
         self._set_cell(table_col, ROW_VOLUME, _fmt(column.volume_ml), editable=True)
         self._set_cell(table_col, ROW_MOLARITY, _fmt(column.molarity), editable=True)

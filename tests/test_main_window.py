@@ -73,6 +73,76 @@ class TestMainWindowBasics:
         window._on_column_selected(0)
         assert window._structure_panel._name_label.text() == "Ethanol"
 
+    def test_add_reagent_requested_appends_blank_column(self, qapp, conn):
+        window = MainWindow(conn)
+        window._on_add_reagent_requested()
+        columns = window._reagent_table.columns()
+        assert len(columns) == DEFAULT_COLUMN_COUNT + 1
+        assert columns[-1].name == ""
+        assert columns[-1].fw is None
+
+
+class TestSaveColumnToLibrary:
+    def test_saves_column_with_fw_and_updates_library_id(self, qapp, conn, monkeypatch):
+        window = MainWindow(conn)
+        window._reagent_table.replace_column(
+            0, ReagentColumn(name="", formula="C6H12O6", fw=180.156, source="formula_parser")
+        )
+        monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("グルコース", True))
+
+        window._on_save_column_requested(0)
+
+        column = window._reagent_table.columns()[0]
+        assert column.library_id is not None
+        assert column.name == "グルコース"
+        saved = library_repo.get(conn, column.library_id)
+        assert saved.name == "グルコース"
+        assert saved.molecular_weight == pytest.approx(180.156)
+
+    def test_missing_fw_shows_warning_and_does_not_save(self, qapp, conn, monkeypatch):
+        window = MainWindow(conn)
+        window._reagent_table.replace_column(0, ReagentColumn(name="NoFw", fw=None))
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+
+        window._on_save_column_requested(0)
+
+        assert warnings
+        assert window._reagent_table.columns()[0].library_id is None
+
+    def test_cancelled_name_dialog_does_not_save(self, qapp, conn, monkeypatch):
+        window = MainWindow(conn)
+        window._reagent_table.replace_column(0, ReagentColumn(name="X", fw=100.0))
+        monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("", False))
+
+        window._on_save_column_requested(0)
+
+        assert window._reagent_table.columns()[0].library_id is None
+
+
+class TestLibraryDialogIntegration:
+    def test_open_library_creates_dialog_once(self, qapp, conn):
+        window = MainWindow(conn)
+        window._on_open_library()
+        first = window._library_dialog
+        assert first is not None
+        window._on_open_library()
+        assert window._library_dialog is first
+
+    def test_library_entry_selected_fills_first_blank_column(self, qapp, conn):
+        entry_id = library_repo.create(
+            conn, LibraryEntry(id=None, name="DMAP", molecular_weight=122.17, source="pubchem", formula="C7H10N2")
+        )
+        window = MainWindow(conn)
+        entry = library_repo.get(conn, entry_id)
+        window._on_library_entry_selected(entry)
+
+        columns = window._reagent_table.columns()
+        assert len(columns) == DEFAULT_COLUMN_COUNT
+        assert columns[0].name == "DMAP"
+        assert columns[0].library_id == entry_id
+        assert columns[0].fw == pytest.approx(122.17)
+
 
 class TestSaveTemplate:
     def test_saves_only_columns_with_library_id(self, qapp, conn, monkeypatch):
@@ -81,7 +151,7 @@ class TestSaveTemplate:
         )
         window = MainWindow(conn)
         window._reagent_table.add_column(
-            ReagentColumn(name="Base", fw=458.27, weight_mg=200, library_id=base_id)
+            ReagentColumn(name="Base", fw=458.27, weight_value=200, library_id=base_id)
         )
         window._reagent_table.add_column(
             ReagentColumn(name="Unsaved", fw=100.0, target_eq=2.0, library_id=None)

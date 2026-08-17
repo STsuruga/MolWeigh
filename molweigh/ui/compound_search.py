@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QTimer, Signal
 
 from ..core import compound_source
 from ..core.compound_source import CompoundInfo
@@ -88,7 +88,7 @@ class ManualCompoundDialog(QDialog):
         self._input = QLineEdit(query)
 
         self._draw_button = QPushButton("構造式を描く…")
-        self._draw_button.clicked.connect(self._on_draw_structure)
+        self._draw_button.clicked.connect(self._on_draw_button_clicked)
 
         self._error_label = QLabel("")
         self._error_label.setStyleSheet("color: #A32D2D;")
@@ -111,11 +111,22 @@ class ManualCompoundDialog(QDialog):
         layout.addWidget(self._error_label)
         layout.addWidget(buttons)
 
-    def _on_draw_structure(self) -> None:
+        # デフォルトの入力手段は構造式を描くこと。ダイアログ表示直後に自動で開き、
+        # ユーザーがキャンセルした場合のみ化学式/SMILESのテキスト入力にフォールバックする。
+        QTimer.singleShot(0, self._auto_open_structure_editor)
+
+    def _on_draw_button_clicked(self) -> None:
+        self._open_structure_editor(warn_if_missing=True)
+
+    def _auto_open_structure_editor(self) -> None:
+        self._open_structure_editor(warn_if_missing=False)
+
+    def _open_structure_editor(self, warn_if_missing: bool) -> None:
         try:
             editor = StructureEditorDialog(self)
         except KetcherNotBundledError as exc:
-            QMessageBox.warning(self, "構造式エディタを開けません", str(exc))
+            if warn_if_missing:
+                QMessageBox.warning(self, "構造式エディタを開けません", str(exc))
             return
         if editor.exec() == QDialog.DialogCode.Accepted and editor.smiles:
             self._mode.setCurrentIndex(1)
