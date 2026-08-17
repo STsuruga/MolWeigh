@@ -1,7 +1,7 @@
 import sqlite3
 
 import pytest
-from PySide6.QtWidgets import QInputDialog, QMessageBox
+from PySide6.QtWidgets import QDialog, QInputDialog, QMessageBox
 
 from molweigh.core.compound_source import CompoundInfo
 from molweigh.db import library_repo, schema, template_repo
@@ -163,6 +163,31 @@ class TestLibraryGridIntegration:
         assert columns[0].name == "DMAP"
         assert columns[0].library_id == entry_id
         assert columns[0].fw == pytest.approx(122.17)
+
+    def test_add_new_requested_opens_editor_and_refreshes_on_accept(self, qapp, conn, monkeypatch):
+        from molweigh.ui.reagent_editor_dialog import ReagentEditorDialog
+
+        def fake_exec(self_dialog):
+            self_dialog.library_id = library_repo.create(
+                conn, LibraryEntry(id=None, name="New", molecular_weight=50.0, source="manual")
+            )
+            return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(ReagentEditorDialog, "exec", fake_exec)
+
+        window = MainWindow(conn)
+        assert window._library_grid._grid.count() == 0
+        window._library_grid.add_new_requested.emit()
+        assert window._library_grid._grid.count() == 1
+
+    def test_add_new_requested_does_not_refresh_on_cancel(self, qapp, conn, monkeypatch):
+        from molweigh.ui.reagent_editor_dialog import ReagentEditorDialog
+
+        monkeypatch.setattr(ReagentEditorDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
+
+        window = MainWindow(conn)
+        window._library_grid.add_new_requested.emit()
+        assert window._library_grid._grid.count() == 0
 
 
 class TestSaveTemplate:

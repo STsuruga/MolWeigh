@@ -25,6 +25,7 @@ from . import theme
 from .compound_search import CompoundSearchBar
 from .library_dialog import LibraryGridWidget
 from .pubchem_browser_panel import PubChemBrowserPanel
+from .reagent_editor_dialog import ReagentEditorDialog
 from .reagent_table import WEIGHT_UNITS, ReagentColumn, ReagentTableWidget
 from .structure_input_panel import StructureInputPanel
 from .structure_panel import StructurePanel
@@ -56,6 +57,7 @@ class MainWindow(QMainWindow):
 
         self._library_grid = LibraryGridWidget(conn)
         self._library_grid.entry_selected.connect(self._on_library_entry_selected)
+        self._library_grid.add_new_requested.connect(self._on_open_reagent_editor)
 
         self._pubchem_panel = PubChemBrowserPanel()
 
@@ -149,6 +151,11 @@ class MainWindow(QMainWindow):
 
     def _on_library_entry_selected(self, entry: LibraryEntry) -> None:
         self._add_or_fill_column(_library_entry_to_column(entry))
+
+    def _on_open_reagent_editor(self) -> None:
+        dialog = ReagentEditorDialog(self._conn, self)
+        if dialog.exec() == ReagentEditorDialog.DialogCode.Accepted:
+            self._library_grid.refresh()
 
     def _add_or_fill_column(self, column: ReagentColumn) -> None:
         blank_index = self._reagent_table.first_blank_column_index()
