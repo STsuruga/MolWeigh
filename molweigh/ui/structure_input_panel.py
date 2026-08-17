@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..core import compound_source
@@ -32,17 +32,27 @@ class StructureInputPanel(QFrame):
         self._ketcher_container.setContentsMargins(0, 0, 0, 0)
         try:
             self._ketcher = KetcherView(self)
-            self._ketcher.setMinimumHeight(360)
+            self._ketcher.setMinimumHeight(320)
             self._ketcher_container.addWidget(self._ketcher)
         except KetcherNotBundledError as exc:
             self._ketcher_container.addWidget(QLabel(str(exc)))
 
-        info_row = QHBoxLayout()
+        info_frame = QFrame()
+        info_frame.setStyleSheet(
+            f"QFrame {{ background: {theme.ACCENT_BG}; border-radius: {theme.RADIUS}px; }}"
+        )
         self._formula_label = QLabel("化学式: —")
+        self._formula_label.setWordWrap(True)
+        self._formula_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._mw_label = QLabel("分子量: —")
-        info_row.addWidget(self._formula_label)
-        info_row.addWidget(self._mw_label)
-        info_row.addStretch()
+        self._mw_label.setWordWrap(True)
+        self._mw_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._mw_label.setStyleSheet(f"font-weight: 600; color: {theme.TEXT_PRIMARY};")
+        info_layout = QVBoxLayout(info_frame)
+        info_layout.setContentsMargins(12, 12, 12, 12)
+        info_layout.setSpacing(6)
+        info_layout.addWidget(self._mw_label)
+        info_layout.addWidget(self._formula_label)
 
         self._calc_button = QPushButton("分子量を計算")
         self._calc_button.clicked.connect(self._on_calculate)
@@ -51,21 +61,28 @@ class StructureInputPanel(QFrame):
         self._add_button.setStyleSheet(theme.accent_button_style())
         self._add_button.clicked.connect(self._on_add_to_table)
 
-        button_row = QHBoxLayout()
-        button_row.addWidget(self._calc_button)
-        button_row.addWidget(self._add_button)
-
         self._error_label = QLabel("")
+        self._error_label.setWordWrap(True)
         self._error_label.setStyleSheet(f"color: {theme.DANGER_TEXT};")
         self._error_label.hide()
+
+        side_column = QVBoxLayout()
+        side_column.setSpacing(10)
+        side_column.addWidget(info_frame)
+        side_column.addWidget(self._error_label)
+        side_column.addStretch(1)
+        side_column.addWidget(self._calc_button)
+        side_column.addWidget(self._add_button)
+
+        content_row = QHBoxLayout()
+        content_row.setSpacing(16)
+        content_row.addLayout(self._ketcher_container, 3)
+        content_row.addLayout(side_column, 1)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
         outer.addWidget(title_label)
-        outer.addLayout(self._ketcher_container, 1)
-        outer.addLayout(info_row)
-        outer.addWidget(self._error_label)
-        outer.addLayout(button_row)
+        outer.addLayout(content_row, 1)
 
     def _on_calculate(self) -> None:
         if self._ketcher is None:

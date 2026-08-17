@@ -91,6 +91,50 @@ QScrollArea {{
     background: transparent;
 }}
 
+QScrollBar:vertical {{
+    background: transparent;
+    width: 10px;
+    margin: 2px;
+}}
+QScrollBar::handle:vertical {{
+    background: {BORDER_STRONG};
+    border-radius: 4px;
+    min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {TEXT_MUTED};
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0px;
+    border: none;
+    background: none;
+}}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: none;
+}}
+
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 10px;
+    margin: 2px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {BORDER_STRONG};
+    border-radius: 4px;
+    min-width: 24px;
+}}
+QScrollBar::handle:horizontal:hover {{
+    background: {TEXT_MUTED};
+}}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+    width: 0px;
+    border: none;
+    background: none;
+}}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+    background: none;
+}}
+
 QListWidget {{
     background: {SURFACE};
     border: 1px solid {BORDER};
