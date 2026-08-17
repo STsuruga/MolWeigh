@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -22,6 +23,7 @@ from ..db import library_repo, template_repo
 from ..db.library_repo import LibraryEntry
 from ..db.template_repo import Template
 from . import theme
+from .calculation_history_panel import CalculationHistoryPanel
 from .library_dialog import LibraryGridWidget
 from .pubchem_browser_panel import PubChemBrowserPanel
 from .reagent_editor_dialog import ReagentEditorDialog
@@ -30,6 +32,7 @@ from .structure_input_panel import StructureInputPanel
 from .template_list_dialog import TemplateListDialog
 
 DEFAULT_COLUMN_COUNT = 5
+_HISTORY_DEBOUNCE_MS = 800
 
 
 class MainWindow(QMainWindow):
@@ -39,9 +42,17 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1200, 760)
         self._conn = conn
 
+        self._history_panel = CalculationHistoryPanel()
+        self._history_panel.restore_requested.connect(self._on_history_restore)
+        self._history_timer = QTimer(self)
+        self._history_timer.setSingleShot(True)
+        self._history_timer.timeout.connect(self._record_history_snapshot)
+
         self._reagent_table = ReagentTableWidget()
+        self._reagent_table.setFixedHeight(self._reagent_table.content_height())
         self._reagent_table.add_reagent_requested.connect(self._on_add_reagent_requested)
         self._reagent_table.save_requested.connect(self._on_save_column_requested)
+        self._reagent_table.columns_changed.connect(self._on_columns_changed_for_history)
         for _ in range(DEFAULT_COLUMN_COUNT):
             self._reagent_table.add_column(ReagentColumn())
 
@@ -62,6 +73,9 @@ class MainWindow(QMainWindow):
         load_template_button.clicked.connect(self._on_open_template_list)
         list_template_button = QPushButton("テンプレート一覧")
         list_template_button.clicked.connect(self._on_open_template_list)
+        reset_button = QPushButton("テーブルをリセット")
+        reset_button.setStyleSheet(theme.danger_ghost_button_style())
+        reset_button.clicked.connect(self._on_reset_table)
 
         title_label = QLabel("当量計算")
         title_label.setStyleSheet(f"font-size: 16px; font-weight: 600; color: {theme.TEXT_PRIMARY};")
@@ -69,9 +83,6 @@ class MainWindow(QMainWindow):
         toolbar_layout = QHBoxLayout()
         toolbar_layout.addWidget(title_label)
         toolbar_layout.addStretch()
-        toolbar_layout.addWidget(add_template_button)
-        toolbar_layout.addWidget(load_template_button)
-        toolbar_layout.addWidget(list_template_button)
 
         self._weight_unit_combo = QComboBox()
         self._weight_unit_combo.addItems(list(WEIGHT_UNITS))
@@ -83,6 +94,19 @@ class MainWindow(QMainWindow):
         table_toolbar.addWidget(QLabel("weight単位:"))
         table_toolbar.addWidget(self._weight_unit_combo)
         table_toolbar.addStretch()
+
+        table_button_row = QHBoxLayout()
+        table_button_row.addWidget(add_template_button)
+        table_button_row.addWidget(load_template_button)
+        table_button_row.addWidget(list_template_button)
+        table_button_row.addStretch()
+        table_button_row.addWidget(reset_button)
+
+        left_column = QVBoxLayout()
+        left_column.setSpacing(16)
+        left_column.addWidget(self._reagent_table)
+        left_column.addLayout(table_button_row)
+        left_column.addWidget(self._history_panel, 1)
 
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(16)
@@ -96,7 +120,7 @@ class MainWindow(QMainWindow):
 
         table_row = QHBoxLayout()
         table_row.setSpacing(16)
-        table_row.addWidget(self._reagent_table, 1)
+        table_row.addLayout(left_column, 1)
         table_row.addLayout(right_column, 2)
 
         central = QWidget()
@@ -111,6 +135,28 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self._structure_input_panel.shutdown()
         super().closeEvent(event)
+
+    def _on_columns_changed_for_history(self) -> None:
+        # 連続した変更を1件にまとめるため、少し待ってから記録する。
+        self._history_timer.start(_HISTORY_DEBOUNCE_MS)
+
+    def _record_history_snapshot(self) -> None:
+        self._history_panel.record(self._reagent_table.columns())
+
+    def _on_history_restore(self, columns: list[ReagentColumn]) -> None:
+        self._reagent_table.clear()
+        for column in columns:
+            self._reagent_table.add_column(column)
+
+    def _on_reset_table(self) -> None:
+        confirm = QMessageBox.question(
+            self, "テーブルをリセット", "計算テーブルの内容をすべてクリアしますか?"
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        self._reagent_table.clear()
+        for _ in range(DEFAULT_COLUMN_COUNT):
+            self._reagent_table.add_column(ReagentColumn())
 
     def _on_compound_resolved(self, info: CompoundInfo) -> None:
         self._add_or_fill_column(_compound_info_to_column(info))

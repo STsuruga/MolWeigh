@@ -222,6 +222,12 @@ class ReagentTableWidget(QWidget):
     def columns(self) -> list[ReagentColumn]:
         return list(self._columns)
 
+    def content_height(self) -> int:
+        """行の合計高さぴったりにWidgetを収める(下に無駄な余白を作らない)ための高さ。"""
+        scrollbar_allowance = 16
+        frame_allowance = 4
+        return _HEADER_ROW_HEIGHT + len(ROW_LABELS) * _DATA_ROW_HEIGHT + scrollbar_allowance + frame_allowance
+
     def selected_column(self) -> ReagentColumn | None:
         col = self._table.currentColumn() - 1
         if 0 <= col < len(self._columns):
@@ -269,6 +275,7 @@ class ReagentTableWidget(QWidget):
             column.volume_ml = None
 
         self._rebuild()
+        self.columns_changed.emit()
 
     def set_global_weight_unit(self, new_unit: str) -> None:
         """全列のweight単位を一括で切り替え、表示値も換算する。"""
