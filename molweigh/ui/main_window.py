@@ -23,6 +23,7 @@ from ..db.library_repo import LibraryEntry
 from . import theme
 from .compound_search import CompoundSearchBar
 from .library_dialog import LibraryGridWidget
+from .pubchem_browser_panel import PubChemBrowserPanel
 from .reagent_table import WEIGHT_UNITS, ReagentColumn, ReagentTableWidget
 from .structure_input_panel import StructureInputPanel
 from .structure_panel import StructurePanel
@@ -53,6 +54,8 @@ class MainWindow(QMainWindow):
 
         self._library_grid = LibraryGridWidget(conn)
         self._library_grid.entry_selected.connect(self._on_library_entry_selected)
+
+        self._pubchem_panel = PubChemBrowserPanel()
 
         self._template_combo = QComboBox()
         load_button = QPushButton("読込")
@@ -91,6 +94,7 @@ class MainWindow(QMainWindow):
         table_row.setSpacing(16)
         table_row.addWidget(self._reagent_table, 1)
         table_row.addLayout(middle_column, 1)
+        table_row.addWidget(self._pubchem_panel, 1)
 
         central = QWidget()
         main_layout = QVBoxLayout(central)
