@@ -282,7 +282,7 @@ class ReagentTableWidget(QWidget):
             unsaved_label.setStyleSheet("color: #BA7517; font-size: 10px;")
             layout.addWidget(unsaved_label)
 
-            save_button = QPushButton("保存")
+            save_button = QPushButton("ライブラリに追加")
             save_button.clicked.connect(lambda _=False, i=index: self.save_requested.emit(i))
             layout.addWidget(save_button)
 

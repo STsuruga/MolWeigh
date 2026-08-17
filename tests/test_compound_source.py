@@ -67,7 +67,9 @@ class TestResolveFromLibrary:
 
 
 class TestResolveFromPubChem:
-    def test_pubchem_hit_is_saved_to_library(self, conn, monkeypatch):
+    def test_pubchem_hit_is_not_saved_to_library(self, conn, monkeypatch):
+        # ライブラリは検索するたびに何でも増えていくと収拾がつかなくなるため、
+        # PubChemヒットも保存ボタンを押すまでライブラリには入らない。
         fake_compound = PubChemCompound(
             cid=2244, name="aspirin", formula="C9H8O4", molecular_weight=180.16,
             smiles="CC(=O)OC1=CC=CC=C1C(=O)O", density=None,
@@ -77,10 +79,8 @@ class TestResolveFromPubChem:
         )
         result = compound_source.resolve_compound(conn, "aspirin")
         assert result.source == "pubchem"
-        assert result.library_id is not None
-        saved = library_repo.get(conn, result.library_id)
-        assert saved.name == "aspirin"
-        assert saved.formula == "C9H8O4"
+        assert result.library_id is None
+        assert library_repo.search(conn, "aspirin") == []
 
     def test_no_hit_anywhere_returns_none(self, conn, monkeypatch):
         monkeypatch.setattr(compound_source.pubchem_client, "search_compound", lambda q: None)

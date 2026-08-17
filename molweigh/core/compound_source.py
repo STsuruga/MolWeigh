@@ -2,11 +2,14 @@
 
 優先順位:
   1. 個人ライブラリ照合(完全一致優先、なければ部分一致が1件のみの場合に採用)
-  2. PubChem検索(ヒットすれば自動でライブラリに保存する)
+  2. PubChem検索
   3. 化学式パーサー / 4. SMILES+RDKit は、ライブラリ・PubChemのいずれにも
      ヒットしない場合にUI側が明示的に呼び出すフォールバック経路。
-     これらの経路で確定した化合物は、UIの保存ボタン操作で
-     `save_to_library` を呼んでライブラリに追加する(自動保存はしない)。
+
+いずれの経路で解決した化合物も、ライブラリへの保存は自動では行わない。
+検索するたびに何でもライブラリに増えていくと収拾がつかなくなるため、
+ユーザーがUIの保存ボタンを明示的に押した場合のみ `save_to_library` を
+呼んでライブラリに追加する(基準は「個人が選んで残した試薬」に限る)。
 
 ライブラリの部分一致検索で複数件ヒットした場合の候補選択UIは未実装
 (仕様書§10の「あいまい検索」検討事項)。現状は完全一致を優先し、
@@ -48,7 +51,7 @@ def resolve_compound(conn: sqlite3.Connection, query: str) -> CompoundInfo | Non
     if library_hit is not None:
         return library_hit
 
-    return _resolve_from_pubchem(conn, query)
+    return _resolve_from_pubchem(query)
 
 
 def resolve_from_formula(formula: str) -> CompoundInfo:
@@ -111,12 +114,12 @@ def _resolve_from_library(conn: sqlite3.Connection, query: str) -> CompoundInfo 
     )
 
 
-def _resolve_from_pubchem(conn: sqlite3.Connection, query: str) -> CompoundInfo | None:
+def _resolve_from_pubchem(query: str) -> CompoundInfo | None:
     result = pubchem_client.search_compound(query)
     if result is None:
         return None
 
-    info = CompoundInfo(
+    return CompoundInfo(
         name=query,
         formula=result.formula,
         molecular_weight=result.molecular_weight,
@@ -124,5 +127,3 @@ def _resolve_from_pubchem(conn: sqlite3.Connection, query: str) -> CompoundInfo 
         smiles=result.smiles,
         source="pubchem",
     )
-    info.library_id = save_to_library(conn, info)
-    return info
