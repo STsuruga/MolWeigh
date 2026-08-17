@@ -22,7 +22,7 @@ from ..db import library_repo, template_repo
 from ..db.library_repo import LibraryEntry
 from . import theme
 from .compound_search import CompoundSearchBar
-from .library_dialog import LibraryDialog
+from .library_dialog import LibraryGridWidget
 from .reagent_table import WEIGHT_UNITS, ReagentColumn, ReagentTableWidget
 from .structure_input_panel import StructureInputPanel
 from .structure_panel import StructurePanel
@@ -50,10 +50,9 @@ class MainWindow(QMainWindow):
         self._structure_input_panel.added_to_table.connect(self._on_compound_resolved)
 
         self._structure_panel = StructurePanel()
-        self._library_dialog: LibraryDialog | None = None
 
-        library_button = QPushButton("ライブラリ")
-        library_button.clicked.connect(self._on_open_library)
+        self._library_grid = LibraryGridWidget(conn)
+        self._library_grid.entry_selected.connect(self._on_library_entry_selected)
 
         self._template_combo = QComboBox()
         load_button = QPushButton("読込")
@@ -67,7 +66,6 @@ class MainWindow(QMainWindow):
         toolbar_layout = QHBoxLayout()
         toolbar_layout.addWidget(title_label)
         toolbar_layout.addStretch()
-        toolbar_layout.addWidget(library_button)
         toolbar_layout.addWidget(self._template_combo)
         toolbar_layout.addWidget(load_button)
         toolbar_layout.addWidget(save_button)
@@ -83,16 +81,16 @@ class MainWindow(QMainWindow):
         table_toolbar.addWidget(self._weight_unit_combo)
         table_toolbar.addStretch()
 
-        right_column = QVBoxLayout()
-        right_column.setSpacing(16)
-        right_column.addWidget(self._structure_input_panel)
-        right_column.addWidget(self._structure_panel)
-        right_column.addStretch()
+        middle_column = QVBoxLayout()
+        middle_column.setSpacing(16)
+        middle_column.addWidget(self._structure_input_panel)
+        middle_column.addWidget(self._structure_panel)
+        middle_column.addWidget(self._library_grid, 1)
 
         table_row = QHBoxLayout()
         table_row.setSpacing(16)
         table_row.addWidget(self._reagent_table, 1)
-        table_row.addLayout(right_column)
+        table_row.addLayout(middle_column, 1)
 
         central = QWidget()
         main_layout = QVBoxLayout(central)
@@ -140,15 +138,7 @@ class MainWindow(QMainWindow):
         column.library_id = compound_source.save_to_library(self._conn, info)
         column.name = name.strip()
         self._reagent_table.replace_column(index, column)
-
-    def _on_open_library(self) -> None:
-        if self._library_dialog is None:
-            self._library_dialog = LibraryDialog(self._conn, self)
-            self._library_dialog.entry_selected.connect(self._on_library_entry_selected)
-        self._library_dialog.refresh()
-        self._library_dialog.show()
-        self._library_dialog.raise_()
-        self._library_dialog.activateWindow()
+        self._library_grid.refresh()
 
     def _on_library_entry_selected(self, entry: LibraryEntry) -> None:
         self._add_or_fill_column(_library_entry_to_column(entry))

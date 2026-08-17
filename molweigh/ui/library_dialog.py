@@ -1,9 +1,10 @@
-"""試薬ライブラリを閲覧・検索・選択・削除するウィンドウ。
+"""試薬ライブラリのカードグリッド(検索・選択・削除)と、それを包む独立ウィンドウ。
 
-メインウィンドウとは独立した非モーダルウィンドウとして開き、選択のたびに
-`entry_selected` を発行して試薬列へ反映する。選択してもウィンドウは
-閉じない(続けて複数の試薬をライブラリから追加できるようにするため)。
-各試薬は構造式画像付きのカードとして、複数列のグリッドで表示する。
+`LibraryGridWidget` がカードグリッド本体で、メイン画面への埋め込みと
+`LibraryDialog`(独立ウィンドウ版)の両方から使う再利用可能な部品。
+選択してもグリッドは閉じない(続けて複数の試薬をライブラリから追加できる
+ようにするため)。各試薬は構造式画像付きのカードとして、複数列のグリッドで
+表示する。
 """
 
 from __future__ import annotations
@@ -34,14 +35,15 @@ _CARD_COLUMNS = 3
 _STRUCTURE_IMAGE_SIZE = (168, 128)
 
 
-class LibraryDialog(QDialog):
+class LibraryGridWidget(QWidget):
+    """検索欄+試薬カードグリッド本体。"""
+
     entry_selected = Signal(object)
+    add_new_requested = Signal()
 
     def __init__(self, conn: sqlite3.Connection, parent: QWidget | None = None):
         super().__init__(parent)
         self._conn = conn
-        self.setWindowTitle("試薬ライブラリ")
-        self.resize(780, 620)
 
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("試薬名 / CAS / 化学式で絞り込み")
@@ -57,19 +59,15 @@ class LibraryDialog(QDialog):
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         scroll_area.setWidget(self._grid_container)
 
-        close_button = QPushButton("閉じる")
-        close_button.clicked.connect(self.close)
-
-        bottom_row = QHBoxLayout()
-        bottom_row.addStretch()
-        bottom_row.addWidget(close_button)
+        self._add_new_button = QPushButton("+ 新しい化合物を登録")
+        self._add_new_button.clicked.connect(self.add_new_requested)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 16)
-        layout.setSpacing(14)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
         layout.addWidget(self._search_input)
         layout.addWidget(scroll_area, 1)
-        layout.addLayout(bottom_row)
+        layout.addWidget(self._add_new_button)
 
         self.refresh()
 
@@ -110,6 +108,35 @@ class LibraryDialog(QDialog):
             return
         library_repo.delete(self._conn, entry.id)
         self.refresh()
+
+
+class LibraryDialog(QDialog):
+    """`LibraryGridWidget` を包む独立ウィンドウ版(非モーダル)。"""
+
+    def __init__(self, conn: sqlite3.Connection, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("試薬ライブラリ")
+        self.resize(780, 620)
+
+        self._grid_widget = LibraryGridWidget(conn, self)
+        self.entry_selected = self._grid_widget.entry_selected
+        self.add_new_requested = self._grid_widget.add_new_requested
+
+        close_button = QPushButton("閉じる")
+        close_button.clicked.connect(self.close)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.addStretch()
+        bottom_row.addWidget(close_button)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(14)
+        layout.addWidget(self._grid_widget, 1)
+        layout.addLayout(bottom_row)
+
+    def refresh(self) -> None:
+        self._grid_widget.refresh()
 
 
 class _LibraryCard(QFrame):

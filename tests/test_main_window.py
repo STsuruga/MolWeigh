@@ -134,14 +134,22 @@ class TestSaveColumnToLibrary:
         assert window._reagent_table.columns()[0].library_id is None
 
 
-class TestLibraryDialogIntegration:
-    def test_open_library_creates_dialog_once(self, qapp, conn):
+class TestLibraryGridIntegration:
+    def test_library_grid_is_embedded_and_populated(self, qapp, conn):
+        library_repo.create(
+            conn, LibraryEntry(id=None, name="DMAP", molecular_weight=122.17, source="pubchem")
+        )
         window = MainWindow(conn)
-        window._on_open_library()
-        first = window._library_dialog
-        assert first is not None
-        window._on_open_library()
-        assert window._library_dialog is first
+        assert window._library_grid._grid.count() == 1
+
+    def test_saving_column_refreshes_library_grid(self, qapp, conn, monkeypatch):
+        window = MainWindow(conn)
+        window._reagent_table.replace_column(0, ReagentColumn(name="X", fw=100.0))
+        monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("X", True))
+
+        assert window._library_grid._grid.count() == 0
+        window._on_save_column_requested(0)
+        assert window._library_grid._grid.count() == 1
 
     def test_library_entry_selected_fills_first_blank_column(self, qapp, conn):
         entry_id = library_repo.create(
