@@ -10,8 +10,9 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ..core import compound_source
+from ..core import compound_source, structure_3d
 from . import theme
+from .molecule_3d_viewer import Molecule3DDialog
 from .structure_editor import KetcherNotBundledError, KetcherView
 
 _SIDE_COLUMN_WIDTH = 150
@@ -66,6 +67,13 @@ class StructureInputPanel(QFrame):
         self._add_button.setStyleSheet(theme.accent_button_style())
         self._add_button.clicked.connect(self._on_add_to_table)
 
+        self._preview_3d_button = QPushButton("3Dプレビュー")
+        self._preview_3d_button.setMaximumWidth(_SIDE_COLUMN_WIDTH)
+        self._preview_3d_button.setToolTip(
+            "RDKitでエネルギー最小化した3D構造を表示します(2D構造には反映されません)"
+        )
+        self._preview_3d_button.clicked.connect(self._on_preview_3d)
+
         self._error_label = QLabel("")
         self._error_label.setMaximumWidth(_SIDE_COLUMN_WIDTH)
         self._error_label.setWordWrap(True)
@@ -78,6 +86,7 @@ class StructureInputPanel(QFrame):
         side_column.addWidget(self._error_label)
         side_column.addStretch(1)
         side_column.addWidget(self._calc_button)
+        side_column.addWidget(self._preview_3d_button)
         side_column.addWidget(self._add_button)
 
         content_row = QHBoxLayout()
@@ -114,6 +123,24 @@ class StructureInputPanel(QFrame):
         if info is not None:
             self._update_info_labels(info)
             self.added_to_table.emit(info)
+
+    def _on_preview_3d(self) -> None:
+        if self._ketcher is None:
+            self._show_error("構造式エディタが利用できません。")
+            return
+        self._error_label.hide()
+        self._ketcher.get_smiles(self._on_smiles_for_3d)
+
+    def _on_smiles_for_3d(self, smiles: str | None) -> None:
+        if not smiles:
+            self._show_error("構造式が空です。原子を配置してください。")
+            return
+        try:
+            molecule = structure_3d.generate_3d_conformer(smiles)
+        except ValueError as exc:
+            self._show_error(str(exc))
+            return
+        Molecule3DDialog(molecule, self).exec()
 
     def _resolve_smiles(self, smiles: str | None):
         if not smiles:

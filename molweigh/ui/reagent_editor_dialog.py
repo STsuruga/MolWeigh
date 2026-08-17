@@ -25,11 +25,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import formula_parser, structure
+from ..core import formula_parser, structure, structure_3d
 from ..db import library_repo
 from ..db.library_repo import LibraryEntry
 from . import theme
 from .library_dialog import _info_row
+from .molecule_3d_viewer import Molecule3DDialog
 from .pubchem_browser_panel import PubChemBrowserPanel
 from .structure_editor import KetcherNotBundledError, KetcherView
 
@@ -137,6 +138,16 @@ class ReagentEditorDialog(QDialog):
         apply_structure_button = QPushButton("構造式を反映")
         apply_structure_button.clicked.connect(self._on_apply_structure)
 
+        preview_3d_button = QPushButton("3Dプレビュー")
+        preview_3d_button.setToolTip(
+            "RDKitでエネルギー最小化した3D構造を表示します(2D構造には反映されません)"
+        )
+        preview_3d_button.clicked.connect(self._on_preview_3d)
+
+        structure_button_row = QHBoxLayout()
+        structure_button_row.addWidget(apply_structure_button)
+        structure_button_row.addWidget(preview_3d_button)
+
         self._name_input = QLineEdit()
         self._name_input.setPlaceholderText("入力")
         self._name_input.textChanged.connect(self._update_preview)
@@ -162,7 +173,7 @@ class ReagentEditorDialog(QDialog):
         self._density_input.valueChanged.connect(self._update_preview)
 
         layout.addLayout(self._ketcher_container, 1)
-        layout.addWidget(apply_structure_button)
+        layout.addLayout(structure_button_row)
         layout.addWidget(_field_row("化合物名", self._name_input))
         layout.addWidget(_field_row("CAS No", self._cas_input))
         layout.addWidget(_field_row("化学式", self._formula_input))
@@ -183,6 +194,23 @@ class ReagentEditorDialog(QDialog):
             QMessageBox.warning(self, "構造式を反映", "構造式エディタが利用できません。")
             return
         self._ketcher.get_smiles(self._on_smiles_received)
+
+    def _on_preview_3d(self) -> None:
+        if self._ketcher is None:
+            QMessageBox.warning(self, "3Dプレビュー", "構造式エディタが利用できません。")
+            return
+        self._ketcher.get_smiles(self._on_smiles_for_3d)
+
+    def _on_smiles_for_3d(self, smiles: str | None) -> None:
+        if not smiles:
+            QMessageBox.warning(self, "3Dプレビュー", "構造式が空です。原子を配置してください。")
+            return
+        try:
+            molecule = structure_3d.generate_3d_conformer(smiles)
+        except ValueError as exc:
+            QMessageBox.warning(self, "3Dプレビュー", str(exc))
+            return
+        Molecule3DDialog(molecule, self).exec()
 
     def _on_smiles_received(self, smiles: str | None) -> None:
         if not smiles:

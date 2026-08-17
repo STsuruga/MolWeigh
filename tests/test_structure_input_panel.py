@@ -89,3 +89,42 @@ class TestShutdown:
     def test_shutdown_stops_ketcher_server(self, qapp):
         panel = StructureInputPanel()
         panel.shutdown()
+
+
+class TestPreview3D:
+    def test_empty_smiles_shows_error(self, qapp):
+        panel = StructureInputPanel()
+        panel._on_smiles_for_3d(None)
+        assert not panel._error_label.isHidden()
+        panel.shutdown()
+
+    def test_invalid_smiles_shows_error(self, qapp):
+        panel = StructureInputPanel()
+        panel._on_smiles_for_3d("not-a-smiles(((")
+        assert not panel._error_label.isHidden()
+        panel.shutdown()
+
+    def test_valid_smiles_opens_dialog(self, qapp, monkeypatch):
+        panel = StructureInputPanel()
+        opened = []
+        monkeypatch.setattr(
+            "molweigh.ui.structure_input_panel.Molecule3DDialog",
+            lambda molecule, parent: opened.append(molecule) or _FakeDialog(),
+        )
+
+        panel._on_smiles_for_3d("CCO")
+
+        assert len(opened) == 1
+        assert panel._error_label.isHidden()
+        panel.shutdown()
+
+    def test_without_ketcher_shows_error(self, qapp, monkeypatch, tmp_path):
+        monkeypatch.setattr(structure_editor, "_VENDOR_DIR", tmp_path / "missing")
+        panel = StructureInputPanel()
+        panel._on_preview_3d()
+        assert not panel._error_label.isHidden()
+
+
+class _FakeDialog:
+    def exec(self):
+        return None

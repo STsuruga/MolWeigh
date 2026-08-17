@@ -64,6 +64,34 @@ class TestStructureEntry:
         assert warnings
 
 
+class TestPreview3D:
+    def test_empty_smiles_shows_warning(self, dialog, monkeypatch):
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+        dialog._on_smiles_for_3d(None)
+        assert warnings
+
+    def test_invalid_smiles_shows_warning(self, dialog, monkeypatch):
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+        dialog._on_smiles_for_3d("not-a-smiles(((")
+        assert warnings
+
+    def test_valid_smiles_opens_dialog(self, dialog, monkeypatch):
+        opened = []
+        monkeypatch.setattr(
+            "molweigh.ui.reagent_editor_dialog.Molecule3DDialog",
+            lambda molecule, parent: opened.append(molecule) or _FakeDialog(),
+        )
+        dialog._on_smiles_for_3d("CCO")
+        assert len(opened) == 1
+
+
+class _FakeDialog:
+    def exec(self):
+        return None
+
+
 class TestPreviewUpdates:
     def test_preview_reflects_name_and_formula(self, dialog):
         dialog._name_input.setText("グルコース")
