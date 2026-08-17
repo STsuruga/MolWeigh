@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import sys
+
+# QtWebEngine(Chromium)のGPUコンポジット周りは、環境によって(特定のGPU
+# ドライバ等)描画が完全に固まる/白紙のままになることがある既知の問題群。
+# QWebEngineWidgetsをインポートする前(=Chromiumプロセスが起動する前)に
+# 設定しておく必要があるため、他のインポートより先にここで行う。
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu-compositing")
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
