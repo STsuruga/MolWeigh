@@ -14,6 +14,8 @@ from ..core import compound_source
 from . import theme
 from .structure_editor import KetcherNotBundledError, KetcherView
 
+_SIDE_COLUMN_WIDTH = 150
+
 
 class StructureInputPanel(QFrame):
     """構造式入力パネル。「試薬に追加」で解決済みの `CompoundInfo` を通知する。"""
@@ -38,6 +40,7 @@ class StructureInputPanel(QFrame):
             self._ketcher_container.addWidget(QLabel(str(exc)))
 
         info_frame = QFrame()
+        info_frame.setMaximumWidth(_SIDE_COLUMN_WIDTH)
         info_frame.setStyleSheet(
             f"QFrame {{ background: {theme.ACCENT_BG}; border-radius: {theme.RADIUS}px; }}"
         )
@@ -55,13 +58,16 @@ class StructureInputPanel(QFrame):
         info_layout.addWidget(self._formula_label)
 
         self._calc_button = QPushButton("分子量を計算")
+        self._calc_button.setMaximumWidth(_SIDE_COLUMN_WIDTH)
         self._calc_button.clicked.connect(self._on_calculate)
 
         self._add_button = QPushButton("試薬に追加")
+        self._add_button.setMaximumWidth(_SIDE_COLUMN_WIDTH)
         self._add_button.setStyleSheet(theme.accent_button_style())
         self._add_button.clicked.connect(self._on_add_to_table)
 
         self._error_label = QLabel("")
+        self._error_label.setMaximumWidth(_SIDE_COLUMN_WIDTH)
         self._error_label.setWordWrap(True)
         self._error_label.setStyleSheet(f"color: {theme.DANGER_TEXT};")
         self._error_label.hide()
@@ -76,8 +82,8 @@ class StructureInputPanel(QFrame):
 
         content_row = QHBoxLayout()
         content_row.setSpacing(16)
-        content_row.addLayout(self._ketcher_container, 3)
-        content_row.addLayout(side_column, 1)
+        content_row.addLayout(self._ketcher_container, 1)
+        content_row.addLayout(side_column)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -30,6 +31,7 @@ from .reagent_editor_dialog import ReagentEditorDialog
 from .reagent_table import WEIGHT_UNITS, ReagentColumn, ReagentTableWidget
 from .structure_input_panel import StructureInputPanel
 from .template_list_dialog import TemplateListDialog
+from .template_list_panel import TemplateListPanel
 
 DEFAULT_COLUMN_COUNT = 5
 _HISTORY_DEBOUNCE_MS = 800
@@ -47,6 +49,9 @@ class MainWindow(QMainWindow):
         self._history_timer = QTimer(self)
         self._history_timer.setSingleShot(True)
         self._history_timer.timeout.connect(self._record_history_snapshot)
+
+        self._template_list_panel = TemplateListPanel(conn)
+        self._template_list_panel.template_selected.connect(self._on_template_loaded)
 
         self._reagent_table = ReagentTableWidget()
         self._reagent_table.setFixedHeight(self._reagent_table.content_height())
@@ -69,20 +74,11 @@ class MainWindow(QMainWindow):
 
         add_template_button = QPushButton("テンプレートに追加")
         add_template_button.clicked.connect(self._on_save_template)
-        load_template_button = QPushButton("テンプレートを呼び出し")
-        load_template_button.clicked.connect(self._on_open_template_list)
-        list_template_button = QPushButton("テンプレート一覧")
+        list_template_button = QPushButton("テンプレート管理")
         list_template_button.clicked.connect(self._on_open_template_list)
         reset_button = QPushButton("テーブルをリセット")
         reset_button.setStyleSheet(theme.danger_ghost_button_style())
         reset_button.clicked.connect(self._on_reset_table)
-
-        title_label = QLabel("当量計算")
-        title_label.setStyleSheet(f"font-size: 16px; font-weight: 600; color: {theme.TEXT_PRIMARY};")
-
-        toolbar_layout = QHBoxLayout()
-        toolbar_layout.addWidget(title_label)
-        toolbar_layout.addStretch()
 
         self._weight_unit_combo = QComboBox()
         self._weight_unit_combo.addItems(list(WEIGHT_UNITS))
@@ -97,16 +93,19 @@ class MainWindow(QMainWindow):
 
         table_button_row = QHBoxLayout()
         table_button_row.addWidget(add_template_button)
-        table_button_row.addWidget(load_template_button)
         table_button_row.addWidget(list_template_button)
         table_button_row.addStretch()
         table_button_row.addWidget(reset_button)
+
+        history_tabs = QTabWidget()
+        history_tabs.addTab(self._history_panel, "計算履歴")
+        history_tabs.addTab(self._template_list_panel, "テンプレート一覧")
 
         left_column = QVBoxLayout()
         left_column.setSpacing(16)
         left_column.addWidget(self._reagent_table)
         left_column.addLayout(table_button_row)
-        left_column.addWidget(self._history_panel, 1)
+        left_column.addWidget(history_tabs, 1)
 
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(16)
@@ -115,7 +114,7 @@ class MainWindow(QMainWindow):
 
         right_column = QVBoxLayout()
         right_column.setSpacing(16)
-        right_column.addWidget(self._structure_input_panel, 2)
+        right_column.addWidget(self._structure_input_panel, 1)
         right_column.addLayout(bottom_row, 1)
 
         table_row = QHBoxLayout()
@@ -127,7 +126,6 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(20, 16, 20, 20)
         main_layout.setSpacing(14)
-        main_layout.addLayout(toolbar_layout)
         main_layout.addLayout(table_toolbar)
         main_layout.addLayout(table_row, 1)
         self.setCentralWidget(central)
@@ -209,6 +207,7 @@ class MainWindow(QMainWindow):
         if self._template_list_dialog is None:
             self._template_list_dialog = TemplateListDialog(self._conn, self)
             self._template_list_dialog.template_loaded.connect(self._on_template_loaded)
+            self._template_list_dialog.finished.connect(lambda _: self._template_list_panel.refresh())
         self._template_list_dialog.refresh()
         self._template_list_dialog.show()
         self._template_list_dialog.raise_()
@@ -270,6 +269,7 @@ class MainWindow(QMainWindow):
             )
         if self._template_list_dialog is not None:
             self._template_list_dialog.refresh()
+        self._template_list_panel.refresh()
 
 
 def _compound_info_to_column(info: CompoundInfo) -> ReagentColumn:

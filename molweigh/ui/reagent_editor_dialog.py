@@ -43,7 +43,8 @@ class ReagentEditorDialog(QDialog):
         super().__init__(parent)
         self._conn = conn
         self.setWindowTitle("化合物を登録")
-        self.resize(1120, 660)
+        self.resize(1400, 800)
+        self.setMinimumSize(1200, 700)
 
         self.library_id: int | None = None
         self._smiles: str | None = None
@@ -56,7 +57,7 @@ class ReagentEditorDialog(QDialog):
         columns_row = QHBoxLayout()
         columns_row.setSpacing(16)
         columns_row.addWidget(left_column)
-        columns_row.addWidget(middle_column, 1)
+        columns_row.addWidget(middle_column, 2)
         columns_row.addWidget(right_column, 1)
 
         save_button = QPushButton("保存")

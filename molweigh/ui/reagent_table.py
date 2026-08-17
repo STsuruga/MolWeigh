@@ -34,6 +34,7 @@ _THUMBNAIL_SIZE = (90, 70)
 _HEADER_ROW_HEIGHT = 235
 _DATA_ROW_HEIGHT = 34
 _DATA_COLUMN_WIDTH = 110
+_ADD_COLUMN_WIDTH = 40
 # 固定列(行ラベル)の幅はデータ列と揃える。横スクロール時に固定列の
 # オーバーレイ幅とスクロールで先頭に来る列の幅が食い違うと、境界に
 # 隣の列の断片が透けて見えてしまうため。
@@ -161,6 +162,9 @@ class ReagentTableWidget(QWidget):
             font.setBold(True)
             item.setFont(font)
             self._table.setItem(row, 0, item)
+            if row == ROW_WEIGHT:
+                self._weight_label_item = item
+        self._update_weight_label(WEIGHT_UNITS[0])
 
         # 横スクロールしても左端の行ラベル列(Fw/weight/...)が常に見えるよう、
         # 同じモデルを共有する固定ビューをcolumn 0の上に重ねて表示する。
@@ -288,11 +292,17 @@ class ReagentTableWidget(QWidget):
                 elif column.weight_unit == "g" and new_unit == "mg":
                     column.weight_value *= 1000
             column.weight_unit = new_unit
+        self._update_weight_label(new_unit)
         self._rebuild()
         self.columns_changed.emit()
 
+    def _update_weight_label(self, unit: str) -> None:
+        self._weight_label_item.setText(f"weight({unit})")
+
     def _rebuild(self) -> None:
         self._table.blockSignals(True)
+        # setColumnCount()は横スクロール位置をリセットしてしまうため、退避して再適用する。
+        scroll_value = self._table.horizontalScrollBar().value()
 
         for c in range(self._table.columnCount()):
             self._clear_cell_widget(HEADER_ROW, c)
@@ -309,8 +319,9 @@ class ReagentTableWidget(QWidget):
             self._render_data_rows(table_col, i, column, result)
 
         add_col = len(self._columns) + 1
-        self._table.setColumnWidth(add_col, 70)
-        add_button = QPushButton("+ 試薬")
+        self._table.setColumnWidth(add_col, _ADD_COLUMN_WIDTH)
+        add_button = QPushButton("+")
+        add_button.setToolTip("試薬を追加")
         add_button.setStyleSheet(theme.accent_button_style())
         add_button.clicked.connect(self.add_reagent_requested)
         self._table.setCellWidget(0, add_col, add_button)
@@ -319,6 +330,7 @@ class ReagentTableWidget(QWidget):
             self._frozen_table.setColumnHidden(col, True)
         self._schedule_frozen_geometry_update()
 
+        self._table.horizontalScrollBar().setValue(scroll_value)
         self._table.blockSignals(False)
 
     def eventFilter(self, obj, event) -> bool:
