@@ -17,7 +17,7 @@ def main() -> int:
     app.setStyleSheet(theme.APP_STYLESHEET)
     conn = schema.get_connection(get_db_path())
     window = MainWindow(conn)
-    window.resize(960, 560)
+    window.resize(1500, 900)
     window.show()
     return app.exec()
 

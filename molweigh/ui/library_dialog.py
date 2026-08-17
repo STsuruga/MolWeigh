@@ -31,8 +31,21 @@ from ..db import library_repo
 from ..db.library_repo import LibraryEntry
 from . import theme
 
-_CARD_COLUMNS = 3
+_CARD_WIDTH = 216
+_CARD_SPACING = 16
 _STRUCTURE_IMAGE_SIZE = (168, 128)
+
+
+class _ResizingScrollArea(QScrollArea):
+    """幅が変わるたびに `on_resize` を呼ぶスクロールエリア(カード列数の再計算用)。"""
+
+    def __init__(self, on_resize, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._on_resize = on_resize
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._on_resize()
 
 
 class LibraryGridWidget(QWidget):
@@ -44,6 +57,7 @@ class LibraryGridWidget(QWidget):
     def __init__(self, conn: sqlite3.Connection, parent: QWidget | None = None):
         super().__init__(parent)
         self._conn = conn
+        self._cards: list[_LibraryCard] = []
 
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("試薬名 / CAS / 化学式で絞り込み")
@@ -51,13 +65,14 @@ class LibraryGridWidget(QWidget):
 
         self._grid_container = QWidget()
         self._grid = QGridLayout(self._grid_container)
-        self._grid.setSpacing(16)
+        self._grid.setSpacing(_CARD_SPACING)
         self._grid.setContentsMargins(4, 4, 4, 4)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        scroll_area.setWidget(self._grid_container)
+        self._scroll_area = _ResizingScrollArea(self._relayout_grid)
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll_area.setWidget(self._grid_container)
+        self._scroll_area.setMinimumHeight(220)
 
         self._add_new_button = QPushButton("+ 新しい化合物を登録")
         self._add_new_button.clicked.connect(self.add_new_requested)
@@ -66,7 +81,7 @@ class LibraryGridWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         layout.addWidget(self._search_input)
-        layout.addWidget(scroll_area, 1)
+        layout.addWidget(self._scroll_area, 1)
         layout.addWidget(self._add_new_button)
 
         self.refresh()
@@ -79,20 +94,28 @@ class LibraryGridWidget(QWidget):
             entries = library_repo.list_all(self._conn, order_by_use_count=True)
 
         self._clear_grid()
-        for i, entry in enumerate(entries):
+        for entry in entries:
             card = _LibraryCard(entry)
             card.add_requested.connect(self._on_add)
             card.delete_requested.connect(self._on_delete)
-            row, col = divmod(i, _CARD_COLUMNS)
-            self._grid.addWidget(card, row, col)
+            self._cards.append(card)
+        self._relayout_grid()
 
     def _clear_grid(self) -> None:
         while self._grid.count():
-            item = self._grid.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+            self._grid.takeAt(0)
+        for card in self._cards:
+            card.setParent(None)
+            card.deleteLater()
+        self._cards.clear()
+
+    def _relayout_grid(self) -> None:
+        columns = max(1, self._scroll_area.viewport().width() // (_CARD_WIDTH + _CARD_SPACING))
+        while self._grid.count():
+            self._grid.takeAt(0)
+        for i, card in enumerate(self._cards):
+            row, col = divmod(i, columns)
+            self._grid.addWidget(card, row, col)
 
     def _on_add(self, entry: LibraryEntry) -> None:
         library_repo.increment_use_count(self._conn, entry.id)

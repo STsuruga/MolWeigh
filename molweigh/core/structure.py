@@ -1,8 +1,8 @@
 """SMILES文字列からRDKitのMolを構築し、分子量・化学式・2D構造式画像を得る。
 
 新規化合物や非販売化合物など、化学式パーサーやPubChemでは解決できない
-場合の入力経路として使う。画像は表示パネル(`ui/structure_panel.py`)で
-そのまま使えるよう `QPixmap` に変換して返す。
+場合の入力経路として使う。画像はUI側でそのまま使えるよう `QPixmap` に
+変換して返す。
 """
 
 from __future__ import annotations

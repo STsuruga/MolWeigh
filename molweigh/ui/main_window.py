@@ -1,4 +1,4 @@
-"""メインウィンドウ。ツールバー(テンプレート)・検索バー・試薬テーブル・構造式パネルを統合する。"""
+"""メインウィンドウ。ツールバー(テンプレート)・試薬テーブル・構造入力・ライブラリ・PubChemパネルを統合する。"""
 
 from __future__ import annotations
 
@@ -22,13 +22,11 @@ from ..db import library_repo, template_repo
 from ..db.library_repo import LibraryEntry
 from ..db.template_repo import Template
 from . import theme
-from .compound_search import CompoundSearchBar
 from .library_dialog import LibraryGridWidget
 from .pubchem_browser_panel import PubChemBrowserPanel
 from .reagent_editor_dialog import ReagentEditorDialog
 from .reagent_table import WEIGHT_UNITS, ReagentColumn, ReagentTableWidget
 from .structure_input_panel import StructureInputPanel
-from .structure_panel import StructurePanel
 from .template_list_dialog import TemplateListDialog
 
 DEFAULT_COLUMN_COUNT = 5
@@ -38,13 +36,10 @@ class MainWindow(QMainWindow):
     def __init__(self, conn: sqlite3.Connection, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("MolWeigh")
+        self.setMinimumSize(1200, 760)
         self._conn = conn
 
-        self._search_bar = CompoundSearchBar(conn)
-        self._search_bar.compound_resolved.connect(self._on_compound_resolved)
-
         self._reagent_table = ReagentTableWidget()
-        self._reagent_table.column_selected.connect(self._on_column_selected)
         self._reagent_table.add_reagent_requested.connect(self._on_add_reagent_requested)
         self._reagent_table.save_requested.connect(self._on_save_column_requested)
         for _ in range(DEFAULT_COLUMN_COUNT):
@@ -52,8 +47,6 @@ class MainWindow(QMainWindow):
 
         self._structure_input_panel = StructureInputPanel()
         self._structure_input_panel.added_to_table.connect(self._on_compound_resolved)
-
-        self._structure_panel = StructurePanel()
 
         self._library_grid = LibraryGridWidget(conn)
         self._library_grid.entry_selected.connect(self._on_library_entry_selected)
@@ -93,13 +86,12 @@ class MainWindow(QMainWindow):
 
         middle_column = QVBoxLayout()
         middle_column.setSpacing(16)
-        middle_column.addWidget(self._structure_input_panel)
-        middle_column.addWidget(self._structure_panel)
+        middle_column.addWidget(self._structure_input_panel, 1)
         middle_column.addWidget(self._library_grid, 1)
 
         table_row = QHBoxLayout()
         table_row.setSpacing(16)
-        table_row.addWidget(self._reagent_table, 1)
+        table_row.addWidget(self._reagent_table, 2)
         table_row.addLayout(middle_column, 1)
         table_row.addWidget(self._pubchem_panel, 1)
 
@@ -108,9 +100,8 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(20, 16, 20, 20)
         main_layout.setSpacing(14)
         main_layout.addLayout(toolbar_layout)
-        main_layout.addWidget(self._search_bar)
         main_layout.addLayout(table_toolbar)
-        main_layout.addLayout(table_row)
+        main_layout.addLayout(table_row, 1)
         self.setCentralWidget(central)
 
     def closeEvent(self, event) -> None:
@@ -163,11 +154,6 @@ class MainWindow(QMainWindow):
             self._reagent_table.replace_column(blank_index, column)
         else:
             self._reagent_table.add_column(column)
-
-    def _on_column_selected(self, index: int) -> None:
-        columns = self._reagent_table.columns()
-        if 0 <= index < len(columns):
-            self._structure_panel.show_compound(columns[index])
 
     def _on_open_template_list(self) -> None:
         if self._template_list_dialog is None:

@@ -61,17 +61,6 @@ class TestMainWindowBasics:
         assert len(columns) == DEFAULT_COLUMN_COUNT + 1
         assert columns[-1].name == "Overflow"
 
-    def test_column_selected_updates_structure_panel(self, qapp, conn):
-        window = MainWindow(conn)
-        window._on_compound_resolved(
-            CompoundInfo(
-                name="Ethanol", formula="C2H6O", molecular_weight=46.069,
-                density=None, smiles="CCO", source="pubchem",
-            )
-        )
-        window._on_column_selected(0)
-        assert window._structure_panel._name_label.text() == "Ethanol"
-
     def test_add_reagent_requested_appends_blank_column(self, qapp, conn):
         window = MainWindow(conn)
         window._on_add_reagent_requested()
@@ -90,7 +79,6 @@ class TestMainWindowBasics:
 
     def test_close_event_shuts_down_structure_input_panel(self, qapp, conn):
         window = MainWindow(conn)
-        window._structure_input_panel._on_toggle()
         assert window._structure_input_panel._ketcher is not None
         window.close()  # 例外が出なければOK
 
