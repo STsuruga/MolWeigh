@@ -108,23 +108,25 @@ class TestPreview3D:
         panel = StructureInputPanel()
         opened = []
         monkeypatch.setattr(
-            "molweigh.ui.structure_input_panel.MoleculeLineArtWebDialog",
-            lambda data, smiles, parent: opened.append((data, smiles)) or _FakeDialog(),
+            "molweigh.ui.structure_input_panel.Molecule3DWebDialog",
+            lambda molblock, view_data, smiles, parent: opened.append((molblock, view_data, smiles))
+            or _FakeDialog(),
         )
 
         panel._on_smiles_for_3d("CCO")
 
         assert len(opened) == 1
-        assert len(opened[0][0].atoms) == 3
-        assert opened[0][1] == "CCO"
+        assert "V2000" in opened[0][0]
+        assert len(opened[0][1].atoms) == 3
+        assert opened[0][2] == "CCO"
         assert panel._error_label.text() == ""
         panel.shutdown()
 
     def test_reflect_result_is_applied_to_ketcher(self, qapp, monkeypatch):
         panel = StructureInputPanel()
         monkeypatch.setattr(
-            "molweigh.ui.structure_input_panel.MoleculeLineArtWebDialog",
-            lambda data, smiles, parent: _FakeDialog(molblock_to_apply="fake molblock"),
+            "molweigh.ui.structure_input_panel.Molecule3DWebDialog",
+            lambda molblock, view_data, smiles, parent: _FakeDialog(molblock_to_apply="fake molblock"),
         )
         received = []
         monkeypatch.setattr(panel._ketcher, "set_smiles", lambda text: received.append(text))
@@ -132,6 +134,22 @@ class TestPreview3D:
         panel._on_smiles_for_3d("CCO")
 
         assert received == ["fake molblock"]
+        panel.shutdown()
+
+    def test_not_bundled_shows_error(self, qapp, monkeypatch):
+        from molweigh.ui.molecule_3d_web_viewer import Molecule3DNotBundledError
+
+        panel = StructureInputPanel()
+        monkeypatch.setattr(
+            "molweigh.ui.structure_input_panel.Molecule3DWebDialog",
+            lambda molblock, view_data, smiles, parent: (_ for _ in ()).throw(
+                Molecule3DNotBundledError("not bundled")
+            ),
+        )
+
+        panel._on_smiles_for_3d("CCO")
+
+        assert panel._error_label.text() != ""
         panel.shutdown()
 
     def test_without_ketcher_shows_error(self, qapp, monkeypatch, tmp_path):

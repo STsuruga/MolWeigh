@@ -26,7 +26,7 @@ class StructureInfo:
 
 
 @dataclass
-class LineArtAtom:
+class Atom3D:
     symbol: str
     x: float
     y: float
@@ -34,16 +34,16 @@ class LineArtAtom:
 
 
 @dataclass
-class LineArtBond:
+class Bond3D:
     begin: int
     end: int
     order: float
 
 
 @dataclass
-class LineArtMolecule:
-    atoms: list[LineArtAtom]
-    bonds: list[LineArtBond]
+class Molecule3DData:
+    atoms: list[Atom3D]
+    bonds: list[Bond3D]
 
 
 def parse_smiles(smiles: str) -> StructureInfo:
@@ -94,37 +94,43 @@ def realign_bridged_structure_molblock(smiles: str) -> str | None:
     return Chem.MolToMolBlock(projected)
 
 
-def generate_lineart_data(smiles: str) -> LineArtMolecule:
-    """線画3Dビューア(`ui/molecule_lineart_viewer.py`)向けに、正準な向きに揃えた
-    3D原子座標・結合リストを生成する。
+def generate_3d_view(smiles: str) -> tuple[str, Molecule3DData]:
+    """3Dプレビュー(`ui/molecule_3d_web_viewer.py`)向けに、3Dmol.js表示用の
+    MOLブロック(水素付き)と、「向きを2Dに反映」機能で使う重原子のみの
+    基準座標を、同一の正準向き・同一原点の座標系で一緒に生成する。
 
-    幾何処理(回転・投影・隠線処理)はJS側で行うため、ここではRDKitでの
-    3D配座生成と、見やすい初期角度への回転(`orient_canonically`)、水素の
-    除去(骨格式表示の慣習に合わせる)のみを行い、素の座標・結合データを返す。
+    3Dmol.jsが計測する回転(カメラのクォータニオン)は、3Dmol.jsに渡した
+    MOLブロックの座標系が基準になる。この基準座標系と「反映」用の原子
+    リストの座標系がズレていると、回転をそのまま適用しても正しい向きに
+    ならないため、必ずこの関数を通じて両方を一つの`orient_canonically`
+    呼び出しから一緒に作る。
     """
     mol_3d = structure_3d.embed_and_optimize(smiles)
     orient_canonically(mol_3d)
-    mol = Chem.RemoveHs(mol_3d)
-    conformer = mol.GetConformer()
+    molblock = Chem.MolToMolBlock(mol_3d)
+
+    mol_heavy = Chem.RemoveHs(mol_3d)
+    conformer = mol_heavy.GetConformer()
     atoms = []
-    for atom in mol.GetAtoms():
+    for atom in mol_heavy.GetAtoms():
         pos = conformer.GetAtomPosition(atom.GetIdx())
-        atoms.append(LineArtAtom(symbol=atom.GetSymbol(), x=pos.x, y=pos.y, z=pos.z))
+        atoms.append(Atom3D(symbol=atom.GetSymbol(), x=pos.x, y=pos.y, z=pos.z))
     bonds = [
-        LineArtBond(begin=b.GetBeginAtomIdx(), end=b.GetEndAtomIdx(), order=b.GetBondTypeAsDouble())
-        for b in mol.GetBonds()
+        Bond3D(begin=b.GetBeginAtomIdx(), end=b.GetEndAtomIdx(), order=b.GetBondTypeAsDouble())
+        for b in mol_heavy.GetBonds()
     ]
-    return LineArtMolecule(atoms=atoms, bonds=bonds)
+    return molblock, Molecule3DData(atoms=atoms, bonds=bonds)
 
 
-def build_molblock_from_lineart_layout(smiles: str, layout: list[tuple[float, float]]) -> str:
-    """線画3Dビューア(`ui/molecule_lineart_viewer.py`)で表示中の分子に対し、
-    ユーザーがマウスで回転させた「今見ている向き」のXY座標(JS側で計算済み)を
+def build_molblock_from_2d_layout(smiles: str, layout: list[tuple[float, float]]) -> str:
+    """3Dプレビュー(`ui/molecule_3d_web_viewer.py`)で表示中の分子に対し、
+    ユーザーが回転させた「今見ている向き」のXY座標(JS側で計算済み)を
     そのまま2Dレイアウトとして持つMOLブロックを作る。
 
-    `generate_lineart_data`と同じ経路(`embed_and_optimize` → `RemoveHs`)で
-    Molを組み立て直す。埋め込みは固定シードで決定的なため、原子順序は
-    ビューアが表示していたものと一致する(`layout`の各要素と対応)。
+    `generate_3d_view`と同じ経路(`embed_and_optimize` → `RemoveHs`、
+    `orient_canonically`は座標を上書きするため不要)でMolを組み立て直す。
+    埋め込みは固定シードで決定的なため、原子順序はビューアが表示していた
+    ものと一致する(`layout`の各要素と対応)。
     """
     mol_3d = structure_3d.embed_and_optimize(smiles)
     mol = Chem.RemoveHs(mol_3d)
@@ -166,8 +172,8 @@ def orient_canonically(mol: Chem.Mol) -> None:
     必ずしも一番綺麗に見えるとは限らない)ため、3通り全てを試し、2D投影
     した際の重原子間の最小距離が最大になる向きを採用する。
 
-    橋かけ構造の2D投影(`_project_3d_to_2d`)だけでなく、線画3Dビューア
-    (`ui/molecule_lineart_viewer.py`)の初期表示角度にも流用する。
+    橋かけ構造の2D投影(`_project_3d_to_2d`)だけでなく、3Dプレビューの
+    「向きを2Dに反映」機能(`ui/molecule_3d_web_viewer.py`)の基準座標にも流用する。
     """
     conformer = mol.GetConformer()
     coords = np.array([list(conformer.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())])

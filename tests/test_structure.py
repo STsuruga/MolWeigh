@@ -5,8 +5,8 @@ from rdkit import Chem
 from molweigh.core import structure_3d
 from molweigh.core.structure import (
     _min_pairwise_distance_2d,
-    build_molblock_from_lineart_layout,
-    generate_lineart_data,
+    build_molblock_from_2d_layout,
+    generate_3d_view,
     orient_canonically,
     parse_smiles,
     realign_bridged_structure_molblock,
@@ -74,39 +74,61 @@ class TestRealignBridgedStructureMolblock:
             realign_bridged_structure_molblock("not-a-smiles(((")
 
 
-class TestGenerateLineartData:
-    def test_ethanol_has_no_explicit_hydrogens(self):
-        data = generate_lineart_data("CCO")
-        assert len(data.atoms) == 3  # C, C, O only (Hs removed)
-        assert {a.symbol for a in data.atoms} == {"C", "O"}
+class TestGenerate3DView:
+    def test_ethanol_has_no_explicit_hydrogens_in_view_data(self):
+        molblock, view_data = generate_3d_view("CCO")
+        assert len(view_data.atoms) == 3  # C, C, O only (Hs removed)
+        assert {a.symbol for a in view_data.atoms} == {"C", "O"}
+
+    def test_molblock_has_explicit_hydrogens(self):
+        molblock, view_data = generate_3d_view("CCO")
+        mol = Chem.MolFromMolBlock(molblock, removeHs=False)
+        assert mol is not None
+        assert mol.GetNumAtoms() > len(view_data.atoms)  # Hs included in molblock
 
     def test_bond_count_and_orders(self):
-        data = generate_lineart_data("C=O")
-        assert len(data.bonds) == 1
-        assert data.bonds[0].order == pytest.approx(2.0)
+        molblock, view_data = generate_3d_view("C=O")
+        assert len(view_data.bonds) == 1
+        assert view_data.bonds[0].order == pytest.approx(2.0)
 
     def test_bridged_structure_succeeds(self):
         triptycene = "c1ccc2c(c1)C1c3ccccc3C2c2ccccc21"
-        data = generate_lineart_data(triptycene)
-        assert len(data.atoms) == Chem.MolFromSmiles(triptycene).GetNumAtoms()
-        assert len(data.bonds) > 0
+        molblock, view_data = generate_3d_view(triptycene)
+        assert len(view_data.atoms) == Chem.MolFromSmiles(triptycene).GetNumAtoms()
+        assert len(view_data.bonds) > 0
 
     def test_invalid_smiles_raises(self):
         with pytest.raises(ValueError):
-            generate_lineart_data("not-a-smiles(((")
+            generate_3d_view("not-a-smiles(((")
+
+    def test_molblock_and_view_data_share_coordinate_frame(self):
+        # generate_3d_view()のmolblock(水素付き)とview_data(重原子のみ)は、
+        # 3Dmol.js側のクォータニオンをview_dataへそのまま適用できるよう、
+        # 同一の正準向き・原点を共有していなければならない。
+        molblock, view_data = generate_3d_view("CCO")
+        mol = Chem.MolFromMolBlock(molblock, removeHs=False)
+        heavy_atoms = [a for a in mol.GetAtoms() if a.GetSymbol() != "H"]
+        conformer = mol.GetConformer()
+        # MOLブロックは座標を小数点以下4桁に丸めて保存するため、往復後は
+        # そのオーダーの誤差が生じる(許容誤差はそれを見込んだもの)。
+        for heavy_atom, view_atom in zip(heavy_atoms, view_data.atoms):
+            pos = conformer.GetAtomPosition(heavy_atom.GetIdx())
+            assert pos.x == pytest.approx(view_atom.x, abs=1e-3)
+            assert pos.y == pytest.approx(view_atom.y, abs=1e-3)
+            assert pos.z == pytest.approx(view_atom.z, abs=1e-3)
 
 
-class TestBuildMolblockFromLineartLayout:
+class TestBuildMolblockFrom2DLayout:
     def test_uses_given_xy_as_2d_layout(self):
-        data = generate_lineart_data("CCO")
+        molblock, view_data = generate_3d_view("CCO")
         layout = [(0.0, 0.0), (1.5, 0.0), (2.2, 1.2)]
 
-        molblock = build_molblock_from_lineart_layout("CCO", layout)
+        result_molblock = build_molblock_from_2d_layout("CCO", layout)
 
-        assert "V2000" in molblock
-        mol = Chem.MolFromMolBlock(molblock)
+        assert "V2000" in result_molblock
+        mol = Chem.MolFromMolBlock(result_molblock)
         assert mol is not None
-        assert mol.GetNumAtoms() == len(data.atoms)
+        assert mol.GetNumAtoms() == len(view_data.atoms)
         conformer = mol.GetConformer()
         for i, (x, y) in enumerate(layout):
             pos = conformer.GetAtomPosition(i)
@@ -116,11 +138,11 @@ class TestBuildMolblockFromLineartLayout:
 
     def test_mismatched_layout_length_raises(self):
         with pytest.raises(ValueError):
-            build_molblock_from_lineart_layout("CCO", [(0.0, 0.0)])
+            build_molblock_from_2d_layout("CCO", [(0.0, 0.0)])
 
     def test_invalid_smiles_raises(self):
         with pytest.raises(ValueError):
-            build_molblock_from_lineart_layout("not-a-smiles(((", [])
+            build_molblock_from_2d_layout("not-a-smiles(((", [])
 
 
 class TestOrientCanonically:

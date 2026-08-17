@@ -6,7 +6,7 @@
 - リポジトリ: `D:\ユーザー\shuta\ドキュメント\MolWeigh`
 - 起動: `python main.py`
 - テスト: `tests/` 配下に232件(pytest)
-- 主要スタック: PySide6(GUI) / RDKit(化学計算・構造処理) / SQLite(DB) / Ketcher(2D構造式エディタ、Web埋め込み) / 自前実装の線画3Dビューア(ChemDraw風、Web埋め込み)
+- 主要スタック: PySide6(GUI) / RDKit(化学計算・構造処理) / SQLite(DB) / Ketcher(2D構造式エディタ、Web埋め込み) / 3Dmol.js(3D構造ビューア、WebGL)
 
 ---
 
@@ -33,7 +33,7 @@ molweigh/
 │   ├── reagent_table.py           当量計算テーブル
 │   ├── structure_input_panel.py   構造入力パネル(★詳細は第4章)
 │   ├── structure_editor.py        Ketcher埋め込み本体(★詳細は第4章)
-│   ├── molecule_lineart_viewer.py 線画3Dビューア(ChemDraw風、★詳細は第4章)
+│   ├── molecule_3d_web_viewer.py  3Dmol.js埋め込みビューア(★詳細は第4章)
 │   ├── library_dialog.py          試薬ライブラリのカードグリッド
 │   ├── template_list_panel.py     テンプレート一覧(常設・軽量)
 │   ├── template_list_dialog.py    テンプレート管理ウィンドウ(編集・削除)
@@ -42,7 +42,8 @@ molweigh/
 │   └── theme.py                   共有スタイル定数・グローバルQSS
 ├── main.py   … 起動エントリポイント
 scripts/
-└── build_ketcher.py   Ketcherの静的ビルドを取得(初回セットアップ、要Node.js)
+├── build_ketcher.py   Ketcherの静的ビルドを取得(初回セットアップ、要Node.js)
+└── fetch_3dmol.py     3Dmol.jsを取得(初回セットアップ、要ネット接続のみ)
 ```
 
 ---
@@ -122,7 +123,7 @@ scripts/
 
 ## 4. 分子構造の描画(詳細)
 
-分子構造まわりは大きく分けて **(A) 2D構造式の編集(Ketcher)**、**(B) 構造式画像の静的レンダリング**、**(C) 橋かけ構造(bridgehead)の特別対応**、**(D) 3Dプレビュー(自前実装の線画ビューア)** の4つの仕組みで構成される。
+分子構造まわりは大きく分けて **(A) 2D構造式の編集(Ketcher)**、**(B) 構造式画像の静的レンダリング**、**(C) 橋かけ構造(bridgehead)の特別対応**、**(D) 3Dプレビュー(3Dmol.js)** の4つの仕組みで構成される。
 
 ### 4.1 (A) Ketcherによる2D構造式編集(`ui/structure_editor.py`)
 
@@ -174,7 +175,7 @@ render_structure_image(smiles)
 4. 3D座標のX・Yだけをコピーし、Z=0.0に固定した新しい`Conformer`を作成して`Set3D(False)` — 実質的に3D構造を正射影で2D化したもの
 5. この2D座標を持つ`Mol`を返す
 
-**`orient_canonically(mol)` — 向き選択アルゴリズム**(橋かけ構造の2D投影だけでなく、4.6節の線画3Dビューアの初期表示角度にも流用する共有ユーティリティ):
+**`orient_canonically(mol)` — 向き選択アルゴリズム**(橋かけ構造の2D投影だけでなく、4.6節の3Dプレビューの基準座標にも流用する共有ユーティリティ):
 
 分子を回転させて「原子同士が2D投影で最も重なりにくい向き」を選ぶ。
 
@@ -192,14 +193,14 @@ render_structure_image(smiles)
 
 ### 4.4 3D配座生成(`core/structure_3d.py`)
 
-ChemDrawの「3D Clean Up」に相当する処理。**Ketcher自身の2D編集データとは完全に独立した別経路**である。ここで生成した3D構造は既定では2D編集データへ書き戻さないが、4.6節の線画ビューアには明示的な「この向きを2Dに反映」機能があり、ユーザーが選んだ場合のみ書き戻せる(4.5節・4.6節参照)。
+ChemDrawの「3D Clean Up」に相当する処理。**Ketcher自身の2D編集データとは完全に独立した別経路**である。ここで生成した3D構造は既定では2D編集データへ書き戻さないが、4.6節の3Dプレビューには明示的な「この向きを2Dに反映」機能があり、ユーザーが選んだ場合のみ書き戻せる(4.5節・4.6節参照)。
 
 **`embed_and_optimize(smiles) -> Chem.Mol`**:
 1. `Chem.MolFromSmiles` → `Chem.AddHs`(明示的水素付加、現実的な3D形状のために必要)
 2. `AllChem.ETKDGv3()`パラメータ(固定シード`0xC0FFEE`、再現性のため)で`EmbedMolecule`。失敗時は`useRandomCoords=True`で1回リトライ。それでも失敗すれば`ValueError`
 3. `AllChem.MMFFOptimizeMolecule`(MMFF94力場)で構造最適化。収束しない/MMFFパラメータが存在しない場合は`AllChem.UFFOptimizeMolecule`(より汎用的なUFF力場)にフォールバック
 
-**`structure.generate_lineart_data(smiles) -> LineArtMolecule`**(`core/structure.py`): 上記の3D配座を`orient_canonically`で見やすい向きに回転し、`Chem.RemoveHs()`で水素を除去したうえで、原子座標・結合リストを`LineArtAtom`/`LineArtBond`のデータクラスへ変換する。4.6節の3Dプレビュー(線画ビューア)への入力となる。回転・投影・隠線処理そのものはJS側で行うため、ここではRDKit側の下ごしらえ(3D配座生成+初期向き決定+水素除去)のみを行う。
+**`structure.generate_3d_view(smiles) -> tuple[str, Molecule3DData]`**(`core/structure.py`): 3D配座を`orient_canonically`で見やすい向きに回転したうえで、(1) 明示的な水素付きMOLブロック(3Dmol.js表示への入力)と、(2) `Chem.RemoveHs()`後の重原子のみの原子・結合リストを`Atom3D`/`Bond3D`のデータクラスで(4.6節「向きを2Dに反映」機能の基準座標として)、同一の座標系で一緒に返す。両者が別々の`orient_canonically`呼び出しから生成されると座標系がズレるため、必ずこの関数を通して同時に作る。
 
 ### 4.5 なぜKetcher自身の3D機能を使わないか
 
@@ -207,17 +208,17 @@ Ketcherには標準で「3D Viewer」ボタン(Miewエンジンによる表示)�
 
 この経緯から、3D関連機能は既定でKetcherの2D編集データと切り離し、**読み取り専用のプレビュー**とする設計とした(4.4節)。ただし4.6節の「この向きを2Dに反映」機能は、Ketcher自身の「3D Viewer→Apply」とは全く別の実装(RDKit側でMolを再構築し、JS側で計算済みの回転後XY座標をMOLブロックへ書き込んで`setMolecule()`に渡す)であり、Ketcherの内部3D回転ロジックを一切経由しないため、上記の立体中心破壊は起きない。
 
-### 4.6 (D) 3Dプレビュー — ChemDraw風線画ビューア(`ui/molecule_lineart_viewer.py`)
+### 4.6 (D) 3Dプレビュー — 3Dmol.js WebGLビューア(`ui/molecule_3d_web_viewer.py`)
 
 「3Dプレビュー」ボタンで開く、マウス操作で回転・ズームできる3D構造ビューア。既定では読み取り専用のプレビューだが、「この向きを2Dに反映」ボタンで今の回転角度を2D構造式に書き戻すこともできる(下記参照)。
 
-**採用経緯**: 当初はPySide6の`QPainter`で自作した疑似3Dレンダラー(手動の回転行列適用+正射影+奥行きソート)、次に[3Dmol.js](https://3dmol.org/)(WebGLベースの分子ビューアライブラリ)を採用したが、ChemDrawの「Clean Up 3D Structure」に見た目を寄せたいという要望を踏まえ、**自前実装のベクター線画レンダラーに置き換えた**。ChemDrawの3D表示は立体的な3Dモデルではなく、3D座標を2Dへ正射影したうえで結合線同士の交差箇所に隠線ギャップを入れる「線画」であり、WebGLの球体・厚みのあるスティック表現とは根本的に見た目が異なるため、既存ライブラリの流用ではなく自作が必要だった。
+**採用経緯**: PySide6の`QPainter`で自作した疑似3Dレンダラー、続いてChemDraw風のSVG線画を毎フレーム再構築する自前JSレンダラーも試したが、実機で「ウィンドウは開くが完全に白紙のまま」という、こちらでは再現できない環境依存の描画不具合が報告され、複数の対策(`setHtml()`へのbaseUrl付与、`AA_ShareOpenGLContexts`、GPUコンポジット無効化、読み込み方式の変更)を講じても解決しなかった。実績があり確実に動作する[3Dmol.js](https://3dmol.org/)(WebGLベースの本格的な分子ビューアライブラリ)へ戻すことで、独自レンダリング方式に起因すると推測される描画不具合を回避している。WebGLのz-bufferにより隠線・隠面処理が正しく自動処理される点、滑らかなマウス操作の回転・ズーム・パンが標準機能として使える点も利点。
 
-- **役割分担**: 化学計算(3D配座生成)は引き続きPython/RDKit側(`structure_3d.embed_and_optimize` + `structure.generate_lineart_data`)が担う。回転(クォータニオン、ジンバルロック回避)・正射影・線分交差判定・隠線ギャップ計算・SVG描画・マウス操作は**すべてJavaScript側で完結**させ、ドラッグ中にPython⇔JS間の往復は一切発生させない(以前のQPainter自作レンダラーで、フレームごとにPython側で再計算するコストが大きすぎた反省を踏まえた設計)。
-- **隠線ギャップ処理**: 全結合ペアを総当たりで線分交差判定し(結合数は数十〜百程度なのでO(n²)で十分)、交差する2本の結合のうち奥(depthが小さい)側の結合を、交差点付近の固定ピクセル幅(既定3px)だけ分割してギャップを開ける。色や太さでの奥行き表現はChemDraw同様に行わない。
-- **オフライン配信**: 外部ライブラリではなく自前実装のJSのため、Ketcher/3Dmol.js時代のようなローカルHTTPサーバー配信は不要。生成したHTML(原子・結合データのJSONとJSを直接埋め込み)を`QWebEngineView.setHtml()`にそのまま渡すだけで、外部CDN・追加セットアップなしに完全オフラインで動作する。
-- **構成**: `MoleculeLineArtWebView(QWidget)`(ビューア本体、読み取り専用。`LineArtMolecule`をJSON化してHTMLへ埋め込み) + `MoleculeLineArtWebDialog(QDialog)`(ダイアログラッパー、600×600、ヒントラベル+「この向きを2Dに反映」「閉じる」ボタン)。ローカルサーバーもファイル同梱もないため、`KetcherNotBundledError`のような「未配置」エラーは存在しない。
-- **「この向きを2Dに反映」の実装**: JS側は`window.__MOLWEIGH_GET_LAYOUT__()`で、現在の回転クォータニオンを適用した後(画面スケール・オフセットは含まない)モデル空間のXY座標を返す。Pythonはこれを`page().runJavaScript()`で1回だけ取得し(ドラッグ中の毎フレーム往復ではなく、ボタン押下時の単発クエリ)、`structure.build_molblock_from_lineart_layout(smiles, layout)`で`embed_and_optimize`→`RemoveHs`を再実行して同じ原子順序のMolを組み立て直し(固定シードのため順序が一致する)、その座標をXY・Z=0の2Dコンフォーマーとして上書きしてMOLブロック化する。呼び出し側(`structure_input_panel.py`/`reagent_editor_dialog.py`)は`dialog.exec()`後に`dialog.molblock_to_apply`が`None`でなければ`ketcher.set_smiles()`に渡す。
+- **オフライン配信**: `3Dmol-min.js`(バージョン2.5.5、`scripts/fetch_3dmol.py`でjsdelivr CDNから一度だけ取得し`molweigh/ui/vendor/3dmol/`にローカル同梱、`.gitignore`済み)を、Ketcherと全く同じ「一時ディレクトリにHTML一式(3Dmol-min.jsのコピー+生成したindex.html)を書き出し、ローカル`ThreadingHTTPServer`を起動して`QWebEngineView.load()`で読み込む」方式で配信する。`setHtml()`ではなくKetcherと同じ`load()`方式に統一しているのは、前述の白紙描画問題の対策(Ketcherは同一環境で確実に動作していた)。
+- **表示スタイル**: `viewer.setStyle({}, {stick: {radius: 0.09, colorscheme: "blackCarbon"}})` — 原子球を表示しないスティックのみの骨格表示、炭素骨格は黒、その他元素は標準CPK配色。原子ラベルは表示しない。
+- **構成**: `Molecule3DWebView(QWidget)`(ビューア本体) + `Molecule3DWebDialog(QDialog)`(ダイアログラッパー、600×600、ヒントラベル+「この向きを2Dに反映」「閉じる」ボタン)。
+- `molweigh/ui/vendor/3dmol/3Dmol-min.js`が存在しない場合は`Molecule3DNotBundledError`を送出し、呼び出し側がエラーメッセージとして表示する(`KetcherNotBundledError`と同じフォールバック設計)。
+- **「この向きを2Dに反映」の実装**: JS側は3Dmol.jsの`viewer.getView()`が返す配列(`[pos.x, pos.y, pos.z, camDist, q.x, q.y, q.z, q.w]`、末尾4要素がカメラ回転のクォータニオン)から回転行列を作り、`structure.generate_3d_view()`が用意した基準座標(3Dmol.jsに渡したMOLブロックと同一の正準向き・原点)に適用してXY座標を計算する(`window.__MOLWEIGH_GET_LAYOUT__()`)。Pythonはこれを`page().runJavaScript()`で1回だけ取得し(ドラッグ中の毎フレーム往復ではなく、ボタン押下時の単発クエリ)、`structure.build_molblock_from_2d_layout(smiles, layout)`で`embed_and_optimize`→`RemoveHs`を再実行して同じ原子順序のMolを組み立て直し(固定シードのため順序が一致する)、その座標をXY・Z=0の2Dコンフォーマーとして上書きしてMOLブロック化する。呼び出し側(`structure_input_panel.py`/`reagent_editor_dialog.py`)は`dialog.exec()`後に`dialog.molblock_to_apply`が`None`でなければ`ketcher.set_smiles()`に渡す。
 
 ### 4.7 構造入力パネルの4つのボタン(`ui/structure_input_panel.py`)
 
@@ -226,7 +227,7 @@ Ketcherには標準で「3D Viewer」ボタン(Miewエンジンによる表示)�
 | ボタン | 処理 | 説明 |
 |---|---|---|
 | **分子量を計算** | `get_smiles` → `compound_source.resolve_from_smiles` | 化学式・分子量ラベルを更新するのみ。計算テーブルには反映しない。「試薬に追加」を押す前でも確認できるようにするための機能。 |
-| **3Dプレビュー** | `get_smiles` → `structure.generate_lineart_data` → `MoleculeLineArtWebDialog` | RDKitでエネルギー最小化した3D構造を、ChemDraw風の線画(隠線ギャップ表示)として別ウィンドウで表示。既定では2D構造に影響しないが、ダイアログ内の「この向きを2Dに反映」を押した場合のみ、回転させた角度をKetcherの2D構造式に書き戻す。 |
+| **3Dプレビュー** | `get_smiles` → `structure.generate_3d_view` → `Molecule3DWebDialog` | RDKitでエネルギー最小化した3D構造を、3Dmol.js(WebGL)で別ウィンドウ表示。既定では2D構造に影響しないが、ダイアログ内の「この向きを2Dに反映」を押した場合のみ、回転させた角度をKetcherの2D構造式に書き戻す。 |
 | **橋かけ構造を整列** | `get_smiles` → `structure.realign_bridged_structure_molblock` → (橋かけなら)`ketcher.set_smiles(molblock)` | 現在Ketcherに描かれている構造が橋かけ構造(bridgehead原子あり)であれば、4.3節のアルゴリズムで見やすい向きに再配置したMOLブロックを**Ketcherのキャンバスへ書き戻す**。橋かけ構造でない場合は「整列は不要です」と案内するのみで何もしない。手描きで乱雑になった橋かけ構造をワンクリックで整理できる、Ketcher自身の自動レイアウトを外部から差し替えられないという制約への対処。 |
 | **試薬に追加** | `get_smiles` → `resolve_from_smiles` → `added_to_table.emit(info)` | 化学式・分子量ラベルを更新し、`CompoundInfo`を計算テーブルへ渡す(`MainWindow`が最初の空き列に挿入、なければ新規列を追加)。 |
 
@@ -321,9 +322,8 @@ SQLite、`PRAGMA user_version`によるバージョン管理マイグレーシ�
 | 対象 | 用途 | 取得方法 | 配置先 | 補足 |
 |---|---|---|---|---|
 | Ketcher | 2D構造式エディタ | `python scripts/build_ketcher.py`(要Node.js) | `molweigh/ui/vendor/ketcher/`(gitignore) | 未配置でも他機能は動作、該当ボタンが警告を出すのみ |
+| 3Dmol.js | 3D構造ビューア | `python scripts/fetch_3dmol.py`(要ネット接続のみ) | `molweigh/ui/vendor/3dmol/`(gitignore) | 同上 |
 | PubChem PUG REST/PUG-View | 化合物名/CAS検索、分子量・化学式・SMILES・比重取得 | 実行時にHTTPS通信(`core/pubchem_client.py`) | — | 比重取得は失敗しても例外を出さずNoneを返す(欠損が多いフィールドのため) |
-
-線画3Dビューア(`ui/molecule_lineart_viewer.py`)は自前実装のJSを埋め込むだけで、外部取得・追加セットアップは不要。
 
 ---
 
@@ -331,7 +331,7 @@ SQLite、`PRAGMA user_version`によるバージョン管理マイグレーシ�
 
 - `tests/`配下にファイル単位でpytestテストを配置(232件)。
 - Qt依存のテストはセッションスコープの`qapp`フィクスチャ(オフスクリーンプラットフォーム)を使用。
-- **既知の環境依存事項**: `QWebEngineView`を伴うテスト(Ketcher・線画3Dビューア関連)を大量に同一プロセスで実行すると、蓄積したリソースが原因でPySide6がまれにネイティブクラッシュ(access violation)することがある。これはテスト対象コードの不具合ではなく環境依存の既知の問題。フルスイートを1プロセスで回さず、ファイル単位のチャンクに分けて実行することで回避する。
+- **既知の環境依存事項**: `QWebEngineView`を伴うテスト(Ketcher・3Dmol.js関連)を大量に同一プロセスで実行すると、蓄積したリソースが原因でPySide6がまれにネイティブクラッシュ(access violation)することがある。これはテスト対象コードの不具合ではなく環境依存の既知の問題。フルスイートを1プロセスで回さず、ファイル単位のチャンクに分けて実行することで回避する。
 
 ---
 
