@@ -12,11 +12,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QLabel,
     QPushButton,
+    QTableView,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -29,6 +31,13 @@ from . import theme
 ROW_LABELS = ["Fw", "weight", "d(g/cm3)", "volume(mL)", "molarity(M)", "mmol", "eq"]
 HEADER_ROW = 0
 _THUMBNAIL_SIZE = (90, 70)
+_HEADER_ROW_HEIGHT = 235
+_DATA_ROW_HEIGHT = 34
+_DATA_COLUMN_WIDTH = 110
+# 固定列(行ラベル)の幅はデータ列と揃える。横スクロール時に固定列の
+# オーバーレイ幅とスクロールで先頭に来る列の幅が食い違うと、境界に
+# 隣の列の断片が透けて見えてしまうため。
+_LABEL_COLUMN_WIDTH = _DATA_COLUMN_WIDTH
 # データ行は1始まり(row 0はヘッダー行のため)
 (ROW_FW, ROW_WEIGHT, ROW_DENSITY, ROW_VOLUME, ROW_MOLARITY, ROW_MMOL, ROW_EQ) = range(1, len(ROW_LABELS) + 1)
 
@@ -132,15 +141,48 @@ class ReagentTableWidget(QWidget):
         self._table = QTableWidget(len(ROW_LABELS) + 1, 1, self)
         self._table.horizontalHeader().hide()
         self._table.verticalHeader().hide()
-        self._table.setRowHeight(HEADER_ROW, 235)
+        # 列単位でスクロールし、固定列との境界に他列の一部が透けて見えるのを防ぐ。
+        self._table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerItem)
+        self._table.verticalHeader().setDefaultSectionSize(_DATA_ROW_HEIGHT)
+        self._table.setRowHeight(HEADER_ROW, _HEADER_ROW_HEIGHT)
         self._table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked | QTableWidget.EditTrigger.EditKeyPressed)
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.currentCellChanged.connect(self._on_current_cell_changed)
+        self._table.installEventFilter(self)
+
+        corner_item = QTableWidgetItem("")
+        corner_item.setFlags(corner_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self._table.setItem(HEADER_ROW, 0, corner_item)
 
         for row, label in enumerate(ROW_LABELS, start=1):
             item = QTableWidgetItem(label)
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
             self._table.setItem(row, 0, item)
+
+        # 横スクロールしても左端の行ラベル列(Fw/weight/...)が常に見えるよう、
+        # 同じモデルを共有する固定ビューをcolumn 0の上に重ねて表示する。
+        self._frozen_table = QTableView(self._table)
+        self._frozen_table.setModel(self._table.model())
+        self._frozen_table.setSelectionModel(self._table.selectionModel())
+        self._frozen_table.horizontalHeader().hide()
+        self._frozen_table.verticalHeader().hide()
+        self._frozen_table.verticalHeader().setDefaultSectionSize(_DATA_ROW_HEIGHT)
+        self._frozen_table.setRowHeight(HEADER_ROW, _HEADER_ROW_HEIGHT)
+        self._frozen_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._frozen_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._frozen_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._frozen_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._frozen_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._frozen_table.setColumnWidth(0, _LABEL_COLUMN_WIDTH)
+        self._frozen_table.setStyleSheet(
+            f"QTableView {{ background: {theme.SURFACE}; border: none; "
+            f"border-right: 1px solid {theme.BORDER_STRONG}; }}"
+        )
+        self._table.verticalScrollBar().valueChanged.connect(self._frozen_table.verticalScrollBar().setValue)
+        self._frozen_table.verticalScrollBar().valueChanged.connect(self._table.verticalScrollBar().setValue)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -248,13 +290,13 @@ class ReagentTableWidget(QWidget):
         for c in range(self._table.columnCount()):
             self._clear_cell_widget(HEADER_ROW, c)
         self._table.setColumnCount(len(self._columns) + 2)
-        self._table.setColumnWidth(0, 84)
+        self._table.setColumnWidth(0, _LABEL_COLUMN_WIDTH)
 
         results = recompute_all(self._columns)
 
         for i, column in enumerate(self._columns):
             table_col = i + 1
-            self._table.setColumnWidth(table_col, 110)
+            self._table.setColumnWidth(table_col, _DATA_COLUMN_WIDTH)
             self._render_header(table_col, i, column)
             result = results[i] if i < len(results) else ComputedResult(None, None, False)
             self._render_data_rows(table_col, i, column, result)
@@ -266,7 +308,31 @@ class ReagentTableWidget(QWidget):
         add_button.clicked.connect(self.add_reagent_requested)
         self._table.setCellWidget(0, add_col, add_button)
 
+        for col in range(1, self._table.columnCount()):
+            self._frozen_table.setColumnHidden(col, True)
+        self._schedule_frozen_geometry_update()
+
         self._table.blockSignals(False)
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self._table and event.type() == QEvent.Type.Resize:
+            self._schedule_frozen_geometry_update()
+        return super().eventFilter(obj, event)
+
+    def _schedule_frozen_geometry_update(self) -> None:
+        # viewport()のサイズは、リサイズイベントがself._table自身のイベント
+        # ハンドラでまだ反映されていない時点では古い値のことがあるため、
+        # イベントループが一巡した後(サイズ確定後)に更新する。
+        QTimer.singleShot(0, self._update_frozen_geometry)
+
+    def _update_frozen_geometry(self) -> None:
+        frame = self._table.frameWidth()
+        self._frozen_table.setGeometry(
+            frame,
+            frame,
+            self._table.columnWidth(0),
+            self._table.viewport().height() + frame * 2,
+        )
 
     def _clear_cell_widget(self, row: int, col: int) -> None:
         old = self._table.cellWidget(row, col)
