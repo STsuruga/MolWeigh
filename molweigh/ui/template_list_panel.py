@@ -19,8 +19,12 @@ class TemplateListPanel(QFrame):
 
     def __init__(self, conn: sqlite3.Connection, parent: QWidget | None = None):
         super().__init__(parent)
+        self.setStyleSheet(theme.card_frame_style("TemplateListPanel"))
         self._conn = conn
         self._templates: list[Template] = []
+
+        title_label = QLabel("テンプレート一覧")
+        title_label.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {theme.TEXT_PRIMARY};")
 
         self._list = QListWidget()
         self._list.itemDoubleClicked.connect(self._on_item_double_clicked)
@@ -29,8 +33,9 @@ class TemplateListPanel(QFrame):
         self._empty_hint.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 12px;")
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(8)
+        outer.addWidget(title_label)
         outer.addWidget(self._empty_hint)
         outer.addWidget(self._list, 1)
         self._list.hide()

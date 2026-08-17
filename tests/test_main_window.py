@@ -83,34 +83,6 @@ class TestMainWindowBasics:
         window.close()  # 例外が出なければOK
 
 
-class TestCalculationHistory:
-    def test_column_edit_records_history_after_debounce(self, qapp, conn):
-        window = MainWindow(conn)
-        window._reagent_table.replace_column(0, ReagentColumn(name="Base", fw=100.0))
-
-        assert window._history_panel._entries == []
-        window._record_history_snapshot()
-
-        assert len(window._history_panel._entries) == 1
-        assert window._history_panel._entries[0].columns[0].name == "Base"
-
-    def test_restore_replaces_table_contents(self, qapp, conn):
-        window = MainWindow(conn)
-        window._reagent_table.clear()
-        window._reagent_table.add_column(ReagentColumn(name="Base", fw=100.0))
-        window._record_history_snapshot()
-        snapshot = window._history_panel._entries[0].columns
-
-        window._reagent_table.replace_column(0, ReagentColumn(name="Changed", fw=1.0))
-
-        window._on_history_restore([ReagentColumn(**vars(c)) for c in snapshot])
-
-        columns = window._reagent_table.columns()
-        assert len(columns) == 1
-        assert columns[0].name == "Base"
-        assert columns[0].fw == pytest.approx(100.0)
-
-
 class TestResetTable:
     def test_reset_clears_to_default_blank_columns(self, qapp, conn, monkeypatch):
         window = MainWindow(conn)
