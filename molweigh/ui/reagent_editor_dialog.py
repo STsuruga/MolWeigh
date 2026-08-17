@@ -30,7 +30,7 @@ from ..db import library_repo
 from ..db.library_repo import LibraryEntry
 from . import theme
 from .library_dialog import _info_row
-from .molecule_3d_viewer import Molecule3DDialog
+from .molecule_3d_web_viewer import Molecule3DNotBundledError, Molecule3DWebDialog
 from .pubchem_browser_panel import PubChemBrowserPanel
 from .structure_editor import KetcherNotBundledError, KetcherView
 
@@ -211,11 +211,14 @@ class ReagentEditorDialog(QDialog):
             QMessageBox.warning(self, "3Dプレビュー", "構造式が空です。原子を配置してください。")
             return
         try:
-            molecule = structure_3d.generate_3d_conformer(smiles)
+            molblock = structure_3d.generate_3d_molblock(smiles)
         except ValueError as exc:
             QMessageBox.warning(self, "3Dプレビュー", str(exc))
             return
-        Molecule3DDialog(molecule, self).exec()
+        try:
+            Molecule3DWebDialog(molblock, self).exec()
+        except Molecule3DNotBundledError as exc:
+            QMessageBox.warning(self, "3Dプレビュー", str(exc))
 
     def _on_realign(self) -> None:
         if self._ketcher is None:

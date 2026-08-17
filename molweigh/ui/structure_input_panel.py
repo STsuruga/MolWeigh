@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLay
 
 from ..core import compound_source, structure, structure_3d
 from . import theme
-from .molecule_3d_viewer import Molecule3DDialog
+from .molecule_3d_web_viewer import Molecule3DNotBundledError, Molecule3DWebDialog
 from .structure_editor import KetcherNotBundledError, KetcherView
 
 _SIDE_COLUMN_WIDTH = 150
@@ -149,11 +149,14 @@ class StructureInputPanel(QFrame):
             self._show_error("構造式が空です。原子を配置してください。")
             return
         try:
-            molecule = structure_3d.generate_3d_conformer(smiles)
+            molblock = structure_3d.generate_3d_molblock(smiles)
         except ValueError as exc:
             self._show_error(str(exc))
             return
-        Molecule3DDialog(molecule, self).exec()
+        try:
+            Molecule3DWebDialog(molblock, self).exec()
+        except Molecule3DNotBundledError as exc:
+            self._show_error(str(exc))
 
     def _on_realign(self) -> None:
         if self._ketcher is None:

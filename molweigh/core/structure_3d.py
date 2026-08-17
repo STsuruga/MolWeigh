@@ -9,33 +9,10 @@ Ketcherの2D編集データとは完全に切り離した別経路とし、こ�
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
 _EMBED_SEED = 0xC0FFEE
-
-
-@dataclass
-class Atom3D:
-    symbol: str
-    x: float
-    y: float
-    z: float
-
-
-@dataclass
-class Bond3D:
-    begin: int
-    end: int
-    order: float
-
-
-@dataclass
-class Molecule3D:
-    atoms: list[Atom3D]
-    bonds: list[Bond3D]
 
 
 def embed_and_optimize(smiles: str) -> Chem.Mol:
@@ -63,17 +40,7 @@ def embed_and_optimize(smiles: str) -> Chem.Mol:
     return mol
 
 
-def generate_3d_conformer(smiles: str) -> Molecule3D:
-    """SMILESから3D配座を生成し、UI描画向けの軽量なデータ構造に変換する。"""
+def generate_3d_molblock(smiles: str) -> str:
+    """SMILESから3D配座を生成し、MOLブロック文字列として返す(3Dmol.js等での表示用)。"""
     mol = embed_and_optimize(smiles)
-
-    conformer = mol.GetConformer()
-    atoms = []
-    for atom in mol.GetAtoms():
-        pos = conformer.GetAtomPosition(atom.GetIdx())
-        atoms.append(Atom3D(symbol=atom.GetSymbol(), x=pos.x, y=pos.y, z=pos.z))
-    bonds = [
-        Bond3D(begin=bond.GetBeginAtomIdx(), end=bond.GetEndAtomIdx(), order=bond.GetBondTypeAsDouble())
-        for bond in mol.GetBonds()
-    ]
-    return Molecule3D(atoms=atoms, bonds=bonds)
+    return Chem.MolToMolBlock(mol)

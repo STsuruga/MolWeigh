@@ -108,14 +108,29 @@ class TestPreview3D:
         panel = StructureInputPanel()
         opened = []
         monkeypatch.setattr(
-            "molweigh.ui.structure_input_panel.Molecule3DDialog",
-            lambda molecule, parent: opened.append(molecule) or _FakeDialog(),
+            "molweigh.ui.structure_input_panel.Molecule3DWebDialog",
+            lambda molblock, parent: opened.append(molblock) or _FakeDialog(),
         )
 
         panel._on_smiles_for_3d("CCO")
 
         assert len(opened) == 1
+        assert "V2000" in opened[0]
         assert panel._error_label.text() == ""
+        panel.shutdown()
+
+    def test_not_bundled_shows_error(self, qapp, monkeypatch):
+        from molweigh.ui.molecule_3d_web_viewer import Molecule3DNotBundledError
+
+        panel = StructureInputPanel()
+        monkeypatch.setattr(
+            "molweigh.ui.structure_input_panel.Molecule3DWebDialog",
+            lambda molblock, parent: (_ for _ in ()).throw(Molecule3DNotBundledError("not bundled")),
+        )
+
+        panel._on_smiles_for_3d("CCO")
+
+        assert panel._error_label.text() != ""
         panel.shutdown()
 
     def test_without_ketcher_shows_error(self, qapp, monkeypatch, tmp_path):
