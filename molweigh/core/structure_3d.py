@@ -38,8 +38,9 @@ class Molecule3D:
     bonds: list[Bond3D]
 
 
-def generate_3d_conformer(smiles: str) -> Molecule3D:
-    """SMILESから水素付加・立体配座生成・力場最適化(MMFF94、失敗時UFF)を行う。"""
+def embed_and_optimize(smiles: str) -> Chem.Mol:
+    """SMILESから水素付加・立体配座生成・力場最適化(MMFF94、失敗時UFF)を行い、
+    3D配座(明示的な水素付き)を持つRDKitのMolを返す。"""
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError(f"SMILESを解析できません: {smiles!r}")
@@ -58,6 +59,13 @@ def generate_3d_conformer(smiles: str) -> Molecule3D:
         converged = -1
     if converged != 0:
         AllChem.UFFOptimizeMolecule(mol)
+
+    return mol
+
+
+def generate_3d_conformer(smiles: str) -> Molecule3D:
+    """SMILESから3D配座を生成し、UI描画向けの軽量なデータ構造に変換する。"""
+    mol = embed_and_optimize(smiles)
 
     conformer = mol.GetConformer()
     atoms = []

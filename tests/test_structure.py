@@ -29,3 +29,14 @@ class TestRenderStructureImage:
     def test_invalid_smiles_raises(self, qapp):
         with pytest.raises(ValueError):
             render_structure_image("not-a-smiles(((")
+
+    def test_bridged_structure_renders_via_3d_projection(self, qapp):
+        # トリプチセン(bridgehead原子を持つ橋かけ構造)
+        triptycene = "c1ccc2c(c1)C1c3ccccc3C2c2ccccc21"
+        pixmap = render_structure_image(triptycene, size=(300, 300))
+        assert not pixmap.isNull()
+        assert pixmap.width() == 300
+
+    def test_non_bridged_structure_unaffected(self, qapp):
+        pixmap = render_structure_image("c1ccccc1", size=(200, 200))
+        assert not pixmap.isNull()
