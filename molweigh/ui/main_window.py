@@ -20,6 +20,7 @@ from ..core import compound_source
 from ..core.compound_source import CompoundInfo
 from ..db import library_repo, template_repo
 from ..db.library_repo import LibraryEntry
+from ..db.template_repo import Template
 from . import theme
 from .compound_search import CompoundSearchBar
 from .library_dialog import LibraryGridWidget
@@ -27,6 +28,7 @@ from .pubchem_browser_panel import PubChemBrowserPanel
 from .reagent_table import WEIGHT_UNITS, ReagentColumn, ReagentTableWidget
 from .structure_input_panel import StructureInputPanel
 from .structure_panel import StructurePanel
+from .template_list_dialog import TemplateListDialog
 
 DEFAULT_COLUMN_COUNT = 5
 
@@ -57,11 +59,14 @@ class MainWindow(QMainWindow):
 
         self._pubchem_panel = PubChemBrowserPanel()
 
-        self._template_combo = QComboBox()
-        load_button = QPushButton("読込")
-        load_button.clicked.connect(self._on_load_template)
-        save_button = QPushButton("名前を付けて保存")
-        save_button.clicked.connect(self._on_save_template)
+        self._template_list_dialog: TemplateListDialog | None = None
+
+        add_template_button = QPushButton("テンプレートに追加")
+        add_template_button.clicked.connect(self._on_save_template)
+        load_template_button = QPushButton("テンプレートを呼び出し")
+        load_template_button.clicked.connect(self._on_open_template_list)
+        list_template_button = QPushButton("テンプレート一覧")
+        list_template_button.clicked.connect(self._on_open_template_list)
 
         title_label = QLabel("当量計算")
         title_label.setStyleSheet(f"font-size: 16px; font-weight: 600; color: {theme.TEXT_PRIMARY};")
@@ -69,9 +74,9 @@ class MainWindow(QMainWindow):
         toolbar_layout = QHBoxLayout()
         toolbar_layout.addWidget(title_label)
         toolbar_layout.addStretch()
-        toolbar_layout.addWidget(self._template_combo)
-        toolbar_layout.addWidget(load_button)
-        toolbar_layout.addWidget(save_button)
+        toolbar_layout.addWidget(add_template_button)
+        toolbar_layout.addWidget(load_template_button)
+        toolbar_layout.addWidget(list_template_button)
 
         self._weight_unit_combo = QComboBox()
         self._weight_unit_combo.addItems(list(WEIGHT_UNITS))
@@ -105,8 +110,6 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(table_toolbar)
         main_layout.addLayout(table_row)
         self.setCentralWidget(central)
-
-        self._refresh_template_combo()
 
     def closeEvent(self, event) -> None:
         self._structure_input_panel.shutdown()
@@ -159,22 +162,16 @@ class MainWindow(QMainWindow):
         if 0 <= index < len(columns):
             self._structure_panel.show_compound(columns[index])
 
-    def _refresh_template_combo(self) -> None:
-        self._template_combo.clear()
-        self._template_combo.addItem("テンプレート: 未選択", None)
-        for tmpl in template_repo.list_all(self._conn):
-            self._template_combo.addItem(tmpl.name, tmpl.id)
+    def _on_open_template_list(self) -> None:
+        if self._template_list_dialog is None:
+            self._template_list_dialog = TemplateListDialog(self._conn, self)
+            self._template_list_dialog.template_loaded.connect(self._on_template_loaded)
+        self._template_list_dialog.refresh()
+        self._template_list_dialog.show()
+        self._template_list_dialog.raise_()
+        self._template_list_dialog.activateWindow()
 
-    def _on_load_template(self) -> None:
-        template_id = self._template_combo.currentData()
-        if template_id is None:
-            QMessageBox.information(self, "テンプレート読込", "テンプレートを選択してください。")
-            return
-        tmpl = template_repo.get(self._conn, template_id)
-        if tmpl is None:
-            QMessageBox.warning(self, "テンプレート読込", "テンプレートが見つかりません。")
-            return
-
+    def _on_template_loaded(self, tmpl: Template) -> None:
         self._reagent_table.clear()
         missing = 0
         for reagent in tmpl.payload.get("reagents", []):
@@ -228,7 +225,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self, "テンプレート保存", f"ライブラリ未保存の{skipped}件は含まれませんでした。"
             )
-        self._refresh_template_combo()
+        if self._template_list_dialog is not None:
+            self._template_list_dialog.refresh()
 
 
 def _compound_info_to_column(info: CompoundInfo) -> ReagentColumn:

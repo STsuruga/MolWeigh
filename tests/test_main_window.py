@@ -20,10 +20,9 @@ def conn():
 
 
 class TestMainWindowBasics:
-    def test_starts_with_only_unselected_template(self, qapp, conn):
+    def test_starts_without_template_list_dialog(self, qapp, conn):
         window = MainWindow(conn)
-        assert window._template_combo.count() == 1
-        assert window._template_combo.itemData(0) is None
+        assert window._template_list_dialog is None
 
     def test_starts_with_default_blank_columns(self, qapp, conn):
         window = MainWindow(conn)
@@ -235,24 +234,13 @@ class TestLoadTemplate:
         )
 
         window = MainWindow(conn)
-        index = window._template_combo.findData(template_id)
-        window._template_combo.setCurrentIndex(index)
-
-        window._on_load_template()
+        tmpl = template_repo.get(conn, template_id)
+        window._on_template_loaded(tmpl)
 
         columns = window._reagent_table.columns()
         assert [c.name for c in columns] == ["Base", "DMAP"]
         assert columns[1].target_eq == pytest.approx(6.0)
         assert columns[0].library_id == base_id
-
-    def test_no_selection_shows_info(self, qapp, conn, monkeypatch):
-        window = MainWindow(conn)
-        columns_before = window._reagent_table.columns()
-        infos = []
-        monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: infos.append(a))
-        window._on_load_template()
-        assert infos
-        assert window._reagent_table.columns() == columns_before
 
     def test_missing_library_entry_is_skipped_with_notice(self, qapp, conn, monkeypatch):
         template_id = template_repo.create(
@@ -261,13 +249,38 @@ class TestLoadTemplate:
             {"reagents": [{"name": "Ghost", "library_id": 9999, "role": "base", "eq": 1.0}]},
         )
         window = MainWindow(conn)
-        index = window._template_combo.findData(template_id)
-        window._template_combo.setCurrentIndex(index)
+        tmpl = template_repo.get(conn, template_id)
 
         infos = []
         monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: infos.append(a))
 
-        window._on_load_template()
+        window._on_template_loaded(tmpl)
 
         assert window._reagent_table.columns() == []
         assert infos
+
+
+class TestTemplateListDialogIntegration:
+    def test_open_creates_dialog_once(self, qapp, conn):
+        window = MainWindow(conn)
+        window._on_open_template_list()
+        first = window._template_list_dialog
+        assert first is not None
+        window._on_open_template_list()
+        assert window._template_list_dialog is first
+
+    def test_saving_template_refreshes_open_dialog(self, qapp, conn, monkeypatch):
+        base_id = library_repo.create(
+            conn, LibraryEntry(id=None, name="Base", molecular_weight=458.27, source="pubchem")
+        )
+        window = MainWindow(conn)
+        window._reagent_table.replace_column(
+            0, ReagentColumn(name="Base", fw=458.27, library_id=base_id)
+        )
+        window._on_open_template_list()
+        assert window._template_list_dialog._list.count() == 0
+
+        monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("新テンプレ", True))
+        window._on_save_template()
+
+        assert window._template_list_dialog._list.count() == 1
