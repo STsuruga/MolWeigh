@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QComboBox,
     QLabel,
     QPushButton,
     QTableWidget,
@@ -24,11 +23,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import calc
+from ..core import calc, structure
 from . import theme
 
 ROW_LABELS = ["Fw", "weight", "d(g/cm3)", "volume(mL)", "molarity(M)", "mmol", "eq"]
 HEADER_ROW = 0
+_THUMBNAIL_SIZE = (90, 70)
 # データ行は1始まり(row 0はヘッダー行のため)
 (ROW_FW, ROW_WEIGHT, ROW_DENSITY, ROW_VOLUME, ROW_MOLARITY, ROW_MMOL, ROW_EQ) = range(1, len(ROW_LABELS) + 1)
 
@@ -68,6 +68,10 @@ def recompute_all(columns: list[ReagentColumn]) -> list[ComputedResult]:
     base_mmol = None
     if base.fw and base.weight_value:
         base_mmol = calc.calc_base_mmol(base.fw, base.weight_value, base.weight_unit)
+        if base.density is not None:
+            base.volume_ml = calc.calc_required_volume(
+                weight=base.weight_value, density=base.density, weight_unit=base.weight_unit
+            )
     results = [ComputedResult(mmol=base_mmol, eq=1.0 if base_mmol is not None else None, is_actual=True)]
 
     for col in columns[1:]:
@@ -76,13 +80,19 @@ def recompute_all(columns: list[ReagentColumn]) -> list[ComputedResult]:
 
 
 def _recompute_column(col: ReagentColumn, base_mmol: float | None) -> ComputedResult:
+    # 比重を入力した場合は重量⇔体積を相互に補完して両方表示する。
     if col.volume_ml is not None and col.density is not None and col.fw:
         mmol = calc.calc_actual_mmol(col.fw, density=col.density, volume=col.volume_ml)
+        col.weight_value = calc.calc_required_weight(col.fw, mmol, col.weight_unit)
         eq = calc.calc_actual_eq(mmol, base_mmol) if base_mmol else None
         return ComputedResult(mmol=mmol, eq=eq, is_actual=True)
 
     if col.weight_is_actual and col.weight_value is not None and col.fw:
         mmol = calc.calc_actual_mmol(col.fw, weight=col.weight_value, weight_unit=col.weight_unit)
+        if col.density is not None:
+            col.volume_ml = calc.calc_required_volume(
+                weight=col.weight_value, density=col.density, weight_unit=col.weight_unit
+            )
         eq = calc.calc_actual_eq(mmol, base_mmol) if base_mmol else None
         return ComputedResult(mmol=mmol, eq=eq, is_actual=True)
 
@@ -90,6 +100,13 @@ def _recompute_column(col: ReagentColumn, base_mmol: float | None) -> ComputedRe
         mmol = calc.calc_target_mmol(base_mmol, col.target_eq)
         if col.fw:
             col.weight_value = calc.calc_required_weight(col.fw, mmol, col.weight_unit)
+            if col.density is not None:
+                col.volume_ml = calc.calc_required_volume(
+                    weight=col.weight_value, density=col.density, weight_unit=col.weight_unit
+                )
+        # 濃度(molarity)のみ入力されている場合は重量を介さず体積だけ算出する。
+        if col.molarity is not None and col.density is None:
+            col.volume_ml = calc.calc_required_volume(mmol=mmol, molarity=col.molarity)
         return ComputedResult(mmol=mmol, eq=col.target_eq, is_actual=False)
 
     return ComputedResult(mmol=None, eq=col.target_eq, is_actual=False)
@@ -115,7 +132,7 @@ class ReagentTableWidget(QWidget):
         self._table = QTableWidget(len(ROW_LABELS) + 1, 1, self)
         self._table.horizontalHeader().hide()
         self._table.verticalHeader().hide()
-        self._table.setRowHeight(HEADER_ROW, 165)
+        self._table.setRowHeight(HEADER_ROW, 235)
         self._table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked | QTableWidget.EditTrigger.EditKeyPressed)
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.currentCellChanged.connect(self._on_current_cell_changed)
@@ -211,19 +228,19 @@ class ReagentTableWidget(QWidget):
 
         self._rebuild()
 
-    def _on_weight_unit_changed(self, index: int, new_unit: str) -> None:
-        if not (0 <= index < len(self._columns)):
-            return
-        column = self._columns[index]
-        if new_unit == column.weight_unit:
-            return
-        if column.weight_value is not None:
-            if column.weight_unit == "mg" and new_unit == "g":
-                column.weight_value /= 1000
-            elif column.weight_unit == "g" and new_unit == "mg":
-                column.weight_value *= 1000
-        column.weight_unit = new_unit
+    def set_global_weight_unit(self, new_unit: str) -> None:
+        """全列のweight単位を一括で切り替え、表示値も換算する。"""
+        for column in self._columns:
+            if new_unit == column.weight_unit:
+                continue
+            if column.weight_value is not None:
+                if column.weight_unit == "mg" and new_unit == "g":
+                    column.weight_value /= 1000
+                elif column.weight_unit == "g" and new_unit == "mg":
+                    column.weight_value *= 1000
+            column.weight_unit = new_unit
         self._rebuild()
+        self.columns_changed.emit()
 
     def _rebuild(self) -> None:
         self._table.blockSignals(True)
@@ -272,6 +289,16 @@ class ReagentTableWidget(QWidget):
         if index == 0:
             layout.addWidget(QLabel("基準"))
 
+        thumbnail_label = QLabel()
+        thumbnail_label.setFixedSize(*_THUMBNAIL_SIZE)
+        thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        thumbnail_label.setStyleSheet(
+            f"background: {theme.ACCENT_BG}; border-radius: 6px; "
+            f"color: {theme.TEXT_MUTED}; font-size: 10px;"
+        )
+        _set_thumbnail(thumbnail_label, column)
+        layout.addWidget(thumbnail_label)
+
         name_label = QLabel(column.name or "(未設定)")
         name_label.setStyleSheet("font-weight: 600;")
         layout.addWidget(name_label)
@@ -289,15 +316,6 @@ class ReagentTableWidget(QWidget):
             save_button.setToolTip("ライブラリに追加")
             save_button.clicked.connect(lambda _=False, i=index: self.save_requested.emit(i))
             layout.addWidget(save_button)
-
-        weight_unit_combo = QComboBox()
-        weight_unit_combo.addItems(list(WEIGHT_UNITS))
-        weight_unit_combo.setCurrentText(column.weight_unit)
-        weight_unit_combo.setFixedWidth(55)
-        weight_unit_combo.currentTextChanged.connect(
-            lambda unit, i=index: self._on_weight_unit_changed(i, unit)
-        )
-        layout.addWidget(weight_unit_combo)
 
         delete_button = QPushButton("×")
         delete_button.setFixedWidth(20)
@@ -338,3 +356,16 @@ def _fmt(value: float | None) -> str:
     if value is None:
         return ""
     return f"{value:.4g}"
+
+
+def _set_thumbnail(label: QLabel, column: ReagentColumn) -> None:
+    if column.smiles:
+        try:
+            label.setPixmap(structure.render_structure_image(column.smiles, size=_THUMBNAIL_SIZE))
+            return
+        except ValueError:
+            pass
+    if column.formula:
+        label.setText(column.formula)
+    else:
+        label.setText("構造式なし")

@@ -23,7 +23,7 @@ from ..db.library_repo import LibraryEntry
 from . import theme
 from .compound_search import CompoundSearchBar
 from .library_dialog import LibraryDialog
-from .reagent_table import ReagentColumn, ReagentTableWidget
+from .reagent_table import WEIGHT_UNITS, ReagentColumn, ReagentTableWidget
 from .structure_panel import StructurePanel
 
 DEFAULT_COLUMN_COUNT = 5
@@ -68,6 +68,17 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(load_button)
         toolbar_layout.addWidget(save_button)
 
+        self._weight_unit_combo = QComboBox()
+        self._weight_unit_combo.addItems(list(WEIGHT_UNITS))
+        self._weight_unit_combo.currentTextChanged.connect(
+            self._reagent_table.set_global_weight_unit
+        )
+
+        table_toolbar = QHBoxLayout()
+        table_toolbar.addWidget(QLabel("weight単位:"))
+        table_toolbar.addWidget(self._weight_unit_combo)
+        table_toolbar.addStretch()
+
         table_row = QHBoxLayout()
         table_row.setSpacing(16)
         table_row.addWidget(self._reagent_table, 1)
@@ -79,6 +90,7 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(14)
         main_layout.addLayout(toolbar_layout)
         main_layout.addWidget(self._search_bar)
+        main_layout.addLayout(table_toolbar)
         main_layout.addLayout(table_row)
         self.setCentralWidget(central)
 

@@ -53,6 +53,50 @@ class TestRecomputeAllPureLogic:
         assert results[1].is_actual is True
         assert results[1].mmol == pytest.approx(6.0)
 
+    def test_density_volume_path_also_fills_weight(self):
+        base = ReagentColumn(fw=458.27, weight_value=200)
+        reagent = ReagentColumn(fw=100.0, density=1.2, volume_ml=0.5)
+        recompute_all([base, reagent])
+        # 0.5mL * 1.2g/mL = 0.6g = 600mg
+        assert reagent.weight_value == pytest.approx(600.0)
+
+    def test_actual_weight_with_density_also_fills_volume(self):
+        base = ReagentColumn(fw=458.27, weight_value=200)
+        reagent = ReagentColumn(fw=100.0, density=1.2, weight_value=600, weight_is_actual=True)
+        recompute_all([base, reagent])
+        # 600mg = 0.6g / 1.2g/mL = 0.5mL
+        assert reagent.volume_ml == pytest.approx(0.5)
+
+    def test_target_eq_with_density_fills_weight_and_volume(self):
+        base = ReagentColumn(fw=458.27, weight_value=200)
+        reagent = ReagentColumn(fw=100.0, density=1.2, target_eq=2.0)
+        results = recompute_all([base, reagent])
+        expected_weight_mg = results[1].mmol * 100.0
+        assert reagent.weight_value == pytest.approx(expected_weight_mg)
+        assert reagent.volume_ml == pytest.approx(expected_weight_mg / 1000 / 1.2)
+
+    def test_target_eq_with_molarity_fills_volume_from_concentration(self):
+        base = ReagentColumn(fw=458.27, weight_value=200)
+        reagent = ReagentColumn(fw=100.0, molarity=2.0, target_eq=2.0)
+        results = recompute_all([base, reagent])
+        expected_mmol = results[1].mmol
+        # 濃度経路のvolumeは mmol/molarity から直接算出する(密度・重量を経由しない)
+        assert reagent.volume_ml == pytest.approx(expected_mmol / reagent.molarity)
+
+    def test_target_eq_with_molarity_and_no_fw_still_fills_volume(self):
+        base = ReagentColumn(fw=458.27, weight_value=200)
+        reagent = ReagentColumn(fw=None, molarity=2.0, target_eq=2.0)
+        results = recompute_all([base, reagent])
+        expected_mmol = results[1].mmol
+        assert reagent.weight_value is None
+        assert reagent.volume_ml == pytest.approx(expected_mmol / 2.0)
+
+    def test_base_column_with_density_fills_volume(self):
+        base = ReagentColumn(fw=458.27, weight_value=200, density=1.05)
+        results = recompute_all([base])
+        assert results[0].mmol is not None
+        assert base.volume_ml == pytest.approx(0.2 / 1.05)
+
     def test_no_input_gives_none_mmol(self):
         base = ReagentColumn(fw=458.27, weight_value=200)
         reagent = ReagentColumn(fw=122.17)
@@ -138,19 +182,30 @@ class TestReagentTableWidget:
 
         assert widget.columns()[0].fw is None
 
-    def test_weight_unit_toggle_converts_stored_value(self, qapp):
+    def test_global_weight_unit_toggle_converts_all_columns(self, qapp):
         widget = ReagentTableWidget()
         widget.add_column(ReagentColumn(name="Base", fw=458.27, weight_value=200, weight_unit="mg"))
+        widget.add_column(ReagentColumn(name="DMAP", fw=122.17, weight_value=100, weight_unit="mg"))
 
-        widget._on_weight_unit_changed(0, "g")
-        column = widget.columns()[0]
-        assert column.weight_unit == "g"
-        assert column.weight_value == pytest.approx(0.2)
+        widget.set_global_weight_unit("g")
+        columns = widget.columns()
+        assert columns[0].weight_unit == "g"
+        assert columns[0].weight_value == pytest.approx(0.2)
+        assert columns[1].weight_unit == "g"
+        assert columns[1].weight_value == pytest.approx(0.1)
 
-        widget._on_weight_unit_changed(0, "mg")
-        column = widget.columns()[0]
-        assert column.weight_unit == "mg"
-        assert column.weight_value == pytest.approx(200)
+        widget.set_global_weight_unit("mg")
+        columns = widget.columns()
+        assert columns[0].weight_value == pytest.approx(200)
+        assert columns[1].weight_value == pytest.approx(100)
+
+    def test_global_weight_unit_toggle_emits_columns_changed(self, qapp):
+        widget = ReagentTableWidget()
+        widget.add_column(ReagentColumn(name="Base", fw=458.27, weight_value=200))
+        received = []
+        widget.columns_changed.connect(lambda: received.append(True))
+        widget.set_global_weight_unit("g")
+        assert received == [True]
 
     def test_weight_unit_g_computes_same_physical_mmol(self, qapp):
         mg_col = ReagentColumn(fw=458.27, weight_value=200, weight_unit="mg")
@@ -173,6 +228,27 @@ class TestReagentTableWidget:
         widget.columns_changed.connect(lambda: received.append(True))
         widget.add_column(ReagentColumn(name="Base", fw=458.27, weight_value=200))
         assert received == [True]
+
+    def test_header_shows_structure_thumbnail_when_smiles_present(self, qapp):
+        widget = ReagentTableWidget()
+        widget.add_column(ReagentColumn(name="Ethanol", formula="C2H6O", smiles="CCO", fw=46.07))
+        header = widget._table.cellWidget(0, 1)
+        thumbnail = header.findChildren(QLabel)[1]  # [0]は「基準」ラベル
+        assert not thumbnail.pixmap().isNull()
+
+    def test_header_shows_formula_fallback_without_smiles(self, qapp):
+        widget = ReagentTableWidget()
+        widget.add_column(ReagentColumn(name="X", formula="C6H12O6", smiles=None, fw=180.16))
+        header = widget._table.cellWidget(0, 1)
+        thumbnail = header.findChildren(QLabel)[1]
+        assert thumbnail.text() == "C6H12O6"
+
+    def test_header_shows_placeholder_without_smiles_or_formula(self, qapp):
+        widget = ReagentTableWidget()
+        widget.add_column(ReagentColumn(name="X", formula=None, smiles=None, fw=100.0))
+        header = widget._table.cellWidget(0, 1)
+        thumbnail = header.findChildren(QLabel)[1]
+        assert thumbnail.text() == "構造式なし"
 
     def test_repeated_rebuilds_do_not_leave_orphaned_header_widgets(self, qapp):
         # 再構築のたびに古いヘッダーWidgetが破棄されず幽霊表示として残るリグレッションの回帰テスト。
