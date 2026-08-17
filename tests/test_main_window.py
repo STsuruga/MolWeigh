@@ -81,6 +81,20 @@ class TestMainWindowBasics:
         assert columns[-1].name == ""
         assert columns[-1].fw is None
 
+    def test_structure_input_panel_added_to_table_fills_first_blank(self, qapp, conn):
+        window = MainWindow(conn)
+        window._structure_input_panel._on_smiles_for_add("CCO")
+        columns = window._reagent_table.columns()
+        assert len(columns) == DEFAULT_COLUMN_COUNT
+        assert columns[0].formula == "C2H6O"
+        assert columns[0].source == "smiles"
+
+    def test_close_event_shuts_down_structure_input_panel(self, qapp, conn):
+        window = MainWindow(conn)
+        window._structure_input_panel._on_toggle()
+        assert window._structure_input_panel._ketcher is not None
+        window.close()  # 例外が出なければOK
+
 
 class TestSaveColumnToLibrary:
     def test_saves_column_with_fw_and_updates_library_id(self, qapp, conn, monkeypatch):

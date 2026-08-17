@@ -24,6 +24,7 @@ from . import theme
 from .compound_search import CompoundSearchBar
 from .library_dialog import LibraryDialog
 from .reagent_table import WEIGHT_UNITS, ReagentColumn, ReagentTableWidget
+from .structure_input_panel import StructureInputPanel
 from .structure_panel import StructurePanel
 
 DEFAULT_COLUMN_COUNT = 5
@@ -44,6 +45,9 @@ class MainWindow(QMainWindow):
         self._reagent_table.save_requested.connect(self._on_save_column_requested)
         for _ in range(DEFAULT_COLUMN_COUNT):
             self._reagent_table.add_column(ReagentColumn())
+
+        self._structure_input_panel = StructureInputPanel()
+        self._structure_input_panel.added_to_table.connect(self._on_compound_resolved)
 
         self._structure_panel = StructurePanel()
         self._library_dialog: LibraryDialog | None = None
@@ -79,10 +83,16 @@ class MainWindow(QMainWindow):
         table_toolbar.addWidget(self._weight_unit_combo)
         table_toolbar.addStretch()
 
+        right_column = QVBoxLayout()
+        right_column.setSpacing(16)
+        right_column.addWidget(self._structure_input_panel)
+        right_column.addWidget(self._structure_panel)
+        right_column.addStretch()
+
         table_row = QHBoxLayout()
         table_row.setSpacing(16)
         table_row.addWidget(self._reagent_table, 1)
-        table_row.addWidget(self._structure_panel)
+        table_row.addLayout(right_column)
 
         central = QWidget()
         main_layout = QVBoxLayout(central)
@@ -95,6 +105,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self._refresh_template_combo()
+
+    def closeEvent(self, event) -> None:
+        self._structure_input_panel.shutdown()
+        super().closeEvent(event)
 
     def _on_compound_resolved(self, info: CompoundInfo) -> None:
         self._add_or_fill_column(_compound_info_to_column(info))
