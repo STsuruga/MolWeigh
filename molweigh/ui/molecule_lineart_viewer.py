@@ -31,9 +31,30 @@ _LINEART_JS = r"""
 (function () {
   "use strict";
 
+  var container = document.getElementById("viewer");
+
+  // 何らかの理由でJS側が例外を投げた場合、白紙のまま沈黙させず、
+  // エラー内容をそのまま画面に表示する(原因調査を容易にするため)。
+  function showFatalError(err) {
+    var msg = (err && err.stack) ? err.stack : String(err);
+    container.innerHTML =
+      '<div style="padding:16px;color:#b00020;font-family:monospace;' +
+      'white-space:pre-wrap;font-size:11px;">' +
+      "線画ビューアの初期化に失敗しました:\n" +
+      msg.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</div>";
+  }
+  window.addEventListener("error", function (e) { showFatalError(e.error || e.message); });
+
+  try {
+    runViewer();
+  } catch (err) {
+    showFatalError(err);
+  }
+
+  function runViewer() {
+
   var atomsIn = window.__MOLWEIGH_ATOMS__;
   var bonds = window.__MOLWEIGH_BONDS__;
-  var container = document.getElementById("viewer");
 
   // 重心を原点へ平行移動しておく(回転・ズームの中心を分子の中心に合わせる)。
   var cx = 0, cy = 0, cz = 0;
@@ -205,10 +226,17 @@ _LINEART_JS = r"""
   window.addEventListener("resize", function () { dirty = true; });
 
   function loop() {
-    if (dirty) { render(); dirty = false; }
+    try {
+      if (dirty) { render(); dirty = false; }
+    } catch (err) {
+      showFatalError(err);
+      return; // 描画ループを止める(エラー表示を上書きし続けないため)
+    }
     window.requestAnimationFrame(loop);
   }
   loop();
+
+  } // runViewer
 })();
 """
 
@@ -221,10 +249,11 @@ _HTML_TEMPLATE = """
   html, body {{ margin: 0; padding: 0; height: 100%; background: #ffffff; overflow: hidden; }}
   #viewer {{ width: 100%; height: 100%; cursor: grab; }}
   #viewer:active {{ cursor: grabbing; }}
+  #viewer .loading {{ padding: 16px; color: #888; font-family: sans-serif; font-size: 12px; }}
 </style>
 </head>
 <body>
-<div id="viewer"></div>
+<div id="viewer"><div class="loading">読み込み中…</div></div>
 <script>
 window.__MOLWEIGH_ATOMS__ = {atoms_json};
 window.__MOLWEIGH_BONDS__ = {bonds_json};
