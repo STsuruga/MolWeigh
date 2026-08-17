@@ -37,18 +37,12 @@ python scripts/build_ketcher.py
 未配置の場合、「構造式を描く…」ボタンは警告を出すだけで、他の機能(化学式/SMILESの
 テキスト入力)には影響しない。
 
-### 3D構造プレビュー(3Dmol.js)の準備
+### 3D構造プレビュー
 
-「3Dプレビュー」ボタンは[3Dmol.js](https://3dmol.org/)(WebGLベースの3D分子ビューア)を
-`QWebEngineView`で埋め込んで使う。Ketcherと同様にリポジトリには同梱していないため、
-初回セットアップ時に以下を実行する(Node.js不要、ネット接続のみ必要)。
-
-```bash
-python scripts/fetch_3dmol.py
-```
-
-`molweigh/ui/vendor/3dmol/` に配置される(`.gitignore`済み)。未配置の場合、
-「3Dプレビュー」ボタンは警告を出すだけで、他の機能には影響しない。
+「3Dプレビュー」ボタンは、ChemDrawの「Clean Up 3D Structure」風に3D構造を
+線画(ベクター、隠線ギャップ表示)で描く自前実装のビューアで、`QWebEngineView`に
+自己完結したHTML/JSを直接埋め込んで表示する。外部ライブラリ・CDN・追加の
+セットアップ手順は不要。
 
 ## 動作環境
 

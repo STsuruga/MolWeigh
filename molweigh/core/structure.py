@@ -25,6 +25,27 @@ class StructureInfo:
     formula: str
 
 
+@dataclass
+class LineArtAtom:
+    symbol: str
+    x: float
+    y: float
+    z: float
+
+
+@dataclass
+class LineArtBond:
+    begin: int
+    end: int
+    order: float
+
+
+@dataclass
+class LineArtMolecule:
+    atoms: list[LineArtAtom]
+    bonds: list[LineArtBond]
+
+
 def parse_smiles(smiles: str) -> StructureInfo:
     """SMILES文字列を解析し、分子量・化学式を算出する。"""
     mol = _mol_from_smiles(smiles)
@@ -73,10 +94,33 @@ def realign_bridged_structure_molblock(smiles: str) -> str | None:
     return Chem.MolToMolBlock(projected)
 
 
+def generate_lineart_data(smiles: str) -> LineArtMolecule:
+    """線画3Dビューア(`ui/molecule_lineart_viewer.py`)向けに、正準な向きに揃えた
+    3D原子座標・結合リストを生成する。
+
+    幾何処理(回転・投影・隠線処理)はJS側で行うため、ここではRDKitでの
+    3D配座生成と、見やすい初期角度への回転(`orient_canonically`)、水素の
+    除去(骨格式表示の慣習に合わせる)のみを行い、素の座標・結合データを返す。
+    """
+    mol_3d = structure_3d.embed_and_optimize(smiles)
+    orient_canonically(mol_3d)
+    mol = Chem.RemoveHs(mol_3d)
+    conformer = mol.GetConformer()
+    atoms = []
+    for atom in mol.GetAtoms():
+        pos = conformer.GetAtomPosition(atom.GetIdx())
+        atoms.append(LineArtAtom(symbol=atom.GetSymbol(), x=pos.x, y=pos.y, z=pos.z))
+    bonds = [
+        LineArtBond(begin=b.GetBeginAtomIdx(), end=b.GetEndAtomIdx(), order=b.GetBondTypeAsDouble())
+        for b in mol.GetBonds()
+    ]
+    return LineArtMolecule(atoms=atoms, bonds=bonds)
+
+
 def _project_3d_to_2d(smiles: str) -> Chem.Mol:
     """3D配座のXY座標をそのまま2Dレイアウトとして流用したMolを作る。"""
     mol_3d = structure_3d.embed_and_optimize(smiles)
-    _orient_canonically(mol_3d)
+    orient_canonically(mol_3d)
     mol = Chem.RemoveHs(mol_3d)
     conformer_3d = mol.GetConformer()
     conformer_2d = Chem.Conformer(mol.GetNumAtoms())
@@ -89,7 +133,7 @@ def _project_3d_to_2d(smiles: str) -> Chem.Mol:
     return mol
 
 
-def _orient_canonically(mol: Chem.Mol) -> None:
+def orient_canonically(mol: Chem.Mol) -> None:
     """3D座標を回転し、重原子同士が2D投影で最も重なりにくい向きを選ぶ。
 
     水素原子は結合長が短く常にどの向きでも隣接原子に近いままなので、
@@ -99,6 +143,9 @@ def _orient_canonically(mol: Chem.Mol) -> None:
     奥行き(Z)に選ぶかで見た目の重なり具合が大きく変わる(分散最小の軸が
     必ずしも一番綺麗に見えるとは限らない)ため、3通り全てを試し、2D投影
     した際の重原子間の最小距離が最大になる向きを採用する。
+
+    橋かけ構造の2D投影(`_project_3d_to_2d`)だけでなく、線画3Dビューア
+    (`ui/molecule_lineart_viewer.py`)の初期表示角度にも流用する。
     """
     conformer = mol.GetConformer()
     coords = np.array([list(conformer.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())])

@@ -1,10 +1,12 @@
 import numpy as np
 import pytest
+from rdkit import Chem
 
 from molweigh.core import structure_3d
 from molweigh.core.structure import (
     _min_pairwise_distance_2d,
-    _orient_canonically,
+    generate_lineart_data,
+    orient_canonically,
     parse_smiles,
     realign_bridged_structure_molblock,
     render_structure_image,
@@ -71,11 +73,33 @@ class TestRealignBridgedStructureMolblock:
             realign_bridged_structure_molblock("not-a-smiles(((")
 
 
+class TestGenerateLineartData:
+    def test_ethanol_has_no_explicit_hydrogens(self):
+        data = generate_lineart_data("CCO")
+        assert len(data.atoms) == 3  # C, C, O only (Hs removed)
+        assert {a.symbol for a in data.atoms} == {"C", "O"}
+
+    def test_bond_count_and_orders(self):
+        data = generate_lineart_data("C=O")
+        assert len(data.bonds) == 1
+        assert data.bonds[0].order == pytest.approx(2.0)
+
+    def test_bridged_structure_succeeds(self):
+        triptycene = "c1ccc2c(c1)C1c3ccccc3C2c2ccccc21"
+        data = generate_lineart_data(triptycene)
+        assert len(data.atoms) == Chem.MolFromSmiles(triptycene).GetNumAtoms()
+        assert len(data.bonds) > 0
+
+    def test_invalid_smiles_raises(self):
+        with pytest.raises(ValueError):
+            generate_lineart_data("not-a-smiles(((")
+
+
 class TestOrientCanonically:
     def test_reorients_in_place(self):
         mol = structure_3d.embed_and_optimize("c1ccc2c(c1)C1c3ccccc3C2c2ccccc21")
         before = [list(mol.GetConformer().GetAtomPosition(i)) for i in range(mol.GetNumAtoms())]
-        _orient_canonically(mol)
+        orient_canonically(mol)
         after = [list(mol.GetConformer().GetAtomPosition(i)) for i in range(mol.GetNumAtoms())]
         assert before != after
 
@@ -100,7 +124,7 @@ class TestOrientCanonically:
             candidate_scores.append(_min_pairwise_distance_2d((centered @ rotation)[heavy_mask]))
         best_candidate_score = max(candidate_scores)
 
-        _orient_canonically(mol)
+        orient_canonically(mol)
         rotated = np.array([list(mol.GetConformer().GetAtomPosition(i)) for i in range(mol.GetNumAtoms())])
         chosen_score = _min_pairwise_distance_2d(rotated[heavy_mask])
 

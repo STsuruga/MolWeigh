@@ -38,9 +38,3 @@ def embed_and_optimize(smiles: str) -> Chem.Mol:
         AllChem.UFFOptimizeMolecule(mol)
 
     return mol
-
-
-def generate_3d_molblock(smiles: str) -> str:
-    """SMILESから3D配座を生成し、MOLブロック文字列として返す(3Dmol.js等での表示用)。"""
-    mol = embed_and_optimize(smiles)
-    return Chem.MolToMolBlock(mol)

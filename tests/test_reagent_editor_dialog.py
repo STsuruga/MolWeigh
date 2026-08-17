@@ -80,24 +80,12 @@ class TestPreview3D:
     def test_valid_smiles_opens_dialog(self, dialog, monkeypatch):
         opened = []
         monkeypatch.setattr(
-            "molweigh.ui.reagent_editor_dialog.Molecule3DWebDialog",
-            lambda molblock, parent: opened.append(molblock) or _FakeDialog(),
+            "molweigh.ui.reagent_editor_dialog.MoleculeLineArtWebDialog",
+            lambda data, parent: opened.append(data) or _FakeDialog(),
         )
         dialog._on_smiles_for_3d("CCO")
         assert len(opened) == 1
-        assert "V2000" in opened[0]
-
-    def test_not_bundled_shows_warning(self, dialog, monkeypatch):
-        from molweigh.ui.molecule_3d_web_viewer import Molecule3DNotBundledError
-
-        warnings = []
-        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
-        monkeypatch.setattr(
-            "molweigh.ui.reagent_editor_dialog.Molecule3DWebDialog",
-            lambda molblock, parent: (_ for _ in ()).throw(Molecule3DNotBundledError("not bundled")),
-        )
-        dialog._on_smiles_for_3d("CCO")
-        assert warnings
+        assert len(opened[0].atoms) == 3
 
 
 class TestRealign:
