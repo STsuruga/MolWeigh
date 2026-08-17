@@ -96,7 +96,7 @@ class MainWindow(QMainWindow):
 
         table_row = QHBoxLayout()
         table_row.setSpacing(16)
-        table_row.addWidget(self._reagent_table, 3)
+        table_row.addWidget(self._reagent_table, 1)
         table_row.addLayout(right_column, 2)
 
         central = QWidget()
