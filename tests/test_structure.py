@@ -1,6 +1,8 @@
+import numpy as np
 import pytest
 
-from molweigh.core.structure import parse_smiles, render_structure_image
+from molweigh.core import structure_3d
+from molweigh.core.structure import _min_pairwise_distance_2d, _orient_canonically, parse_smiles, render_structure_image
 
 
 class TestParseSmiles:
@@ -40,3 +42,39 @@ class TestRenderStructureImage:
     def test_non_bridged_structure_unaffected(self, qapp):
         pixmap = render_structure_image("c1ccccc1", size=(200, 200))
         assert not pixmap.isNull()
+
+
+class TestOrientCanonically:
+    def test_reorients_in_place(self):
+        mol = structure_3d.embed_and_optimize("c1ccc2c(c1)C1c3ccccc3C2c2ccccc21")
+        before = [list(mol.GetConformer().GetAtomPosition(i)) for i in range(mol.GetNumAtoms())]
+        _orient_canonically(mol)
+        after = [list(mol.GetConformer().GetAtomPosition(i)) for i in range(mol.GetNumAtoms())]
+        assert before != after
+
+    def test_chooses_best_of_the_three_candidate_axes(self):
+        # 3方向(どの主軸を奥行きにするか)のうち、実際にスコア最大の
+        # 向きが選ばれていることを確認する。
+        mol = structure_3d.embed_and_optimize("c1ccc2c(c1)C1c3ccccc3C2c2ccccc21")
+        heavy_mask = np.array([atom.GetAtomicNum() != 1 for atom in mol.GetAtoms()])
+        conformer = mol.GetConformer()
+        coords = np.array([list(conformer.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())])
+        centered = coords - coords.mean(axis=0)
+        _, eigenvectors = np.linalg.eigh(np.cov(centered[heavy_mask].T))
+
+        candidate_scores = []
+        for depth_axis in range(3):
+            other_axes = [i for i in range(3) if i != depth_axis]
+            rotation = np.column_stack(
+                [eigenvectors[:, other_axes[0]], eigenvectors[:, other_axes[1]], eigenvectors[:, depth_axis]]
+            )
+            if np.linalg.det(rotation) < 0:
+                rotation[:, -1] *= -1
+            candidate_scores.append(_min_pairwise_distance_2d((centered @ rotation)[heavy_mask]))
+        best_candidate_score = max(candidate_scores)
+
+        _orient_canonically(mol)
+        rotated = np.array([list(mol.GetConformer().GetAtomPosition(i)) for i in range(mol.GetNumAtoms())])
+        chosen_score = _min_pairwise_distance_2d(rotated[heavy_mask])
+
+        assert chosen_score == pytest.approx(best_candidate_score)
