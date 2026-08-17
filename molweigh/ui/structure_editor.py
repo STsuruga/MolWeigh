@@ -18,6 +18,8 @@ from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout, QWidget
 
+from . import theme
+
 _VENDOR_DIR = Path(__file__).resolve().parent / "vendor" / "ketcher"
 
 _POLL_INTERVAL_MS = 150
@@ -71,7 +73,7 @@ class StructureEditorDialog(QDialog):
         self._view.load(QUrl(f"http://127.0.0.1:{port}/index.html"))
 
         self._error_label = QLabel("")
-        self._error_label.setStyleSheet("color: #A32D2D;")
+        self._error_label.setStyleSheet(f"color: {theme.DANGER_TEXT};")
         self._error_label.hide()
 
         buttons = QDialogButtonBox(

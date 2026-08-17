@@ -28,41 +28,10 @@ from PySide6.QtWidgets import (
 from ..core import structure
 from ..db import library_repo
 from ..db.library_repo import LibraryEntry
+from . import theme
 
 _CARD_COLUMNS = 3
 _STRUCTURE_IMAGE_SIZE = (168, 128)
-
-_BG = "#F4F3EF"
-_CARD_BG = "#FFFFFF"
-_BORDER = "#E3E1D9"
-_TEXT_PRIMARY = "#2C2C2A"
-_TEXT_MUTED = "#8B8A82"
-_ACCENT = "#185FA5"
-_ACCENT_BG = "#E6F1FB"
-
-_DIALOG_STYLE = f"""
-QDialog {{ background: {_BG}; }}
-QScrollArea {{ background: {_BG}; border: none; }}
-QLineEdit {{
-    background: {_CARD_BG};
-    border: 1px solid {_BORDER};
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 13px;
-}}
-QLineEdit:focus {{ border: 1px solid {_ACCENT}; }}
-"""
-
-_CLOSE_BUTTON_STYLE = """
-QPushButton {
-    background: transparent;
-    border: 1px solid #C9C7BC;
-    border-radius: 6px;
-    padding: 6px 16px;
-    font-size: 12px;
-}
-QPushButton:hover { background: #EAE8E0; }
-"""
 
 
 class LibraryDialog(QDialog):
@@ -73,14 +42,12 @@ class LibraryDialog(QDialog):
         self._conn = conn
         self.setWindowTitle("試薬ライブラリ")
         self.resize(780, 620)
-        self.setStyleSheet(_DIALOG_STYLE)
 
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("試薬名 / CAS / 化学式で絞り込み")
         self._search_input.textChanged.connect(self.refresh)
 
         self._grid_container = QWidget()
-        self._grid_container.setStyleSheet(f"background: {_BG};")
         self._grid = QGridLayout(self._grid_container)
         self._grid.setSpacing(16)
         self._grid.setContentsMargins(4, 4, 4, 4)
@@ -91,7 +58,6 @@ class LibraryDialog(QDialog):
         scroll_area.setWidget(self._grid_container)
 
         close_button = QPushButton("閉じる")
-        close_button.setStyleSheet(_CLOSE_BUTTON_STYLE)
         close_button.clicked.connect(self.close)
 
         bottom_row = QHBoxLayout()
@@ -156,15 +122,7 @@ class _LibraryCard(QFrame):
         super().__init__(parent)
         self._entry = entry
         self.setFixedWidth(216)
-        self.setStyleSheet(
-            f"""
-            _LibraryCard {{
-                background: {_CARD_BG};
-                border: 1px solid {_BORDER};
-                border-radius: 14px;
-            }}
-            """
-        )
+        self.setStyleSheet(theme.card_frame_style("_LibraryCard"))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 14)
@@ -174,13 +132,14 @@ class _LibraryCard(QFrame):
         self._image_label.setFixedSize(*_STRUCTURE_IMAGE_SIZE)
         self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._image_label.setStyleSheet(
-            f"background: {_ACCENT_BG}; border-radius: 10px; color: {_TEXT_MUTED}; font-size: 12px;"
+            f"background: {theme.ACCENT_BG}; border-radius: 10px; "
+            f"color: {theme.TEXT_MUTED}; font-size: 12px;"
         )
         self._set_structure_image(entry)
         layout.addWidget(self._image_label)
 
         name_label = QLabel(entry.name)
-        name_label.setStyleSheet(f"font-weight: 600; font-size: 14px; color: {_TEXT_PRIMARY};")
+        name_label.setStyleSheet(f"font-weight: 600; font-size: 14px; color: {theme.TEXT_PRIMARY};")
         name_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         name_label.setWordWrap(True)
         layout.addWidget(name_label)
@@ -200,36 +159,11 @@ class _LibraryCard(QFrame):
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
         self._add_button = QPushButton("追加")
-        self._add_button.setStyleSheet(
-            f"""
-            QPushButton {{
-                background: {_ACCENT};
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 7px 0;
-                font-size: 12px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{ background: #14507F; }}
-            """
-        )
+        self._add_button.setStyleSheet(theme.accent_button_style())
         self._add_button.clicked.connect(lambda: self.add_requested.emit(self._entry))
 
         self._delete_button = QPushButton("削除")
-        self._delete_button.setStyleSheet(
-            f"""
-            QPushButton {{
-                background: transparent;
-                color: {_TEXT_MUTED};
-                border: 1px solid {_BORDER};
-                border-radius: 8px;
-                padding: 7px 0;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{ background: #FBEAEA; color: #A32D2D; border-color: #EAC6C6; }}
-            """
-        )
+        self._delete_button.setStyleSheet(theme.danger_ghost_button_style())
         self._delete_button.clicked.connect(lambda: self.delete_requested.emit(self._entry))
 
         button_row.addWidget(self._add_button, 1)
@@ -252,9 +186,9 @@ def _info_row(label: str, value: str) -> QWidget:
     row_layout = QHBoxLayout(row)
     row_layout.setContentsMargins(0, 0, 0, 0)
     label_widget = QLabel(label)
-    label_widget.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 11px;")
+    label_widget.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 11px;")
     value_widget = QLabel(value)
-    value_widget.setStyleSheet(f"color: {_TEXT_PRIMARY}; font-size: 12px; font-weight: 500;")
+    value_widget.setStyleSheet(f"color: {theme.TEXT_PRIMARY}; font-size: 12px; font-weight: 500;")
     row_layout.addWidget(label_widget)
     row_layout.addStretch()
     row_layout.addWidget(value_widget)

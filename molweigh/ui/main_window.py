@@ -20,6 +20,7 @@ from ..core import compound_source
 from ..core.compound_source import CompoundInfo
 from ..db import library_repo, template_repo
 from ..db.library_repo import LibraryEntry
+from . import theme
 from .compound_search import CompoundSearchBar
 from .library_dialog import LibraryDialog
 from .reagent_table import ReagentColumn, ReagentTableWidget
@@ -56,8 +57,11 @@ class MainWindow(QMainWindow):
         save_button = QPushButton("名前を付けて保存")
         save_button.clicked.connect(self._on_save_template)
 
+        title_label = QLabel("当量計算")
+        title_label.setStyleSheet(f"font-size: 16px; font-weight: 600; color: {theme.TEXT_PRIMARY};")
+
         toolbar_layout = QHBoxLayout()
-        toolbar_layout.addWidget(QLabel("当量計算"))
+        toolbar_layout.addWidget(title_label)
         toolbar_layout.addStretch()
         toolbar_layout.addWidget(library_button)
         toolbar_layout.addWidget(self._template_combo)
@@ -65,11 +69,14 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(save_button)
 
         table_row = QHBoxLayout()
+        table_row.setSpacing(16)
         table_row.addWidget(self._reagent_table, 1)
         table_row.addWidget(self._structure_panel)
 
         central = QWidget()
         main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(20, 16, 20, 20)
+        main_layout.setSpacing(14)
         main_layout.addLayout(toolbar_layout)
         main_layout.addWidget(self._search_bar)
         main_layout.addLayout(table_row)

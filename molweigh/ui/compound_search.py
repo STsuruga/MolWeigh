@@ -26,6 +26,7 @@ from PySide6.QtCore import QTimer, Signal
 from ..core import compound_source
 from ..core.compound_source import CompoundInfo
 from ..core.pubchem_client import PubChemError
+from . import theme
 from .structure_editor import KetcherNotBundledError, StructureEditorDialog
 
 
@@ -43,6 +44,7 @@ class CompoundSearchBar(QWidget):
         self._input.returnPressed.connect(self._on_search)
 
         self._button = QPushButton("照合")
+        self._button.setStyleSheet(theme.accent_button_style())
         self._button.clicked.connect(self._on_search)
 
         layout = QHBoxLayout(self)
@@ -91,7 +93,7 @@ class ManualCompoundDialog(QDialog):
         self._draw_button.clicked.connect(self._on_draw_button_clicked)
 
         self._error_label = QLabel("")
-        self._error_label.setStyleSheet("color: #A32D2D;")
+        self._error_label.setStyleSheet(f"color: {theme.DANGER_TEXT};")
         self._error_label.hide()
 
         buttons = QDialogButtonBox(

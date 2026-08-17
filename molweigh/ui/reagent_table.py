@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import calc
+from . import theme
 
 ROW_LABELS = ["Fw", "weight", "d(g/cm3)", "volume(mL)", "molarity(M)", "mmol", "eq"]
 HEADER_ROW = 0
@@ -94,9 +95,9 @@ def _recompute_column(col: ReagentColumn, base_mmol: float | None) -> ComputedRe
     return ComputedResult(mmol=None, eq=col.target_eq, is_actual=False)
 
 
-_ACTUAL_EQ_COLOR = QColor("#E1F5EE")
-_TARGET_EQ_COLOR = QColor("#E6F1FB")
-_BASE_EQ_COLOR = QColor("#D3D1C7")
+_ACTUAL_EQ_COLOR = QColor(theme.SUCCESS_BG)
+_TARGET_EQ_COLOR = QColor(theme.ACCENT_BG)
+_BASE_EQ_COLOR = QColor(theme.BASE_BG)
 
 
 class ReagentTableWidget(QWidget):
@@ -244,6 +245,7 @@ class ReagentTableWidget(QWidget):
         add_col = len(self._columns) + 1
         self._table.setColumnWidth(add_col, 70)
         add_button = QPushButton("+ 試薬")
+        add_button.setStyleSheet(theme.accent_button_style())
         add_button.clicked.connect(self.add_reagent_requested)
         self._table.setCellWidget(0, add_col, add_button)
 
@@ -258,6 +260,7 @@ class ReagentTableWidget(QWidget):
         # ネイティブクラッシュする。既存Widgetは必ず破棄し、置き換え先には
         # 常に新規インスタンスを使う。
         self._table.removeCellWidget(row, col)
+        old.hide()
         old.setParent(None)
         old.deleteLater()
 
@@ -274,15 +277,16 @@ class ReagentTableWidget(QWidget):
         layout.addWidget(name_label)
 
         formula_label = QLabel(column.formula or "")
-        formula_label.setStyleSheet("color: #888780; font-size: 11px;")
+        formula_label.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 11px;")
         layout.addWidget(formula_label)
 
         if column.library_id is None and (column.name or column.fw is not None):
             unsaved_label = QLabel("未保存")
-            unsaved_label.setStyleSheet("color: #BA7517; font-size: 10px;")
+            unsaved_label.setStyleSheet(f"color: {theme.WARNING_TEXT}; font-size: 10px;")
             layout.addWidget(unsaved_label)
 
-            save_button = QPushButton("ライブラリに追加")
+            save_button = QPushButton("追加")
+            save_button.setToolTip("ライブラリに追加")
             save_button.clicked.connect(lambda _=False, i=index: self.save_requested.emit(i))
             layout.addWidget(save_button)
 
@@ -297,12 +301,13 @@ class ReagentTableWidget(QWidget):
 
         delete_button = QPushButton("×")
         delete_button.setFixedWidth(20)
+        delete_button.setStyleSheet(theme.danger_ghost_button_style())
         delete_button.clicked.connect(lambda _=False, i=index: self.remove_column(i))
         layout.addWidget(delete_button)
 
         self._table.setCellWidget(0, table_col, container)
         if index == 0:
-            container.setStyleSheet("background-color: #E6F1FB;")
+            container.setStyleSheet(f"background-color: {theme.ACCENT_BG};")
 
     def _render_data_rows(
         self, table_col: int, index: int, column: ReagentColumn, result: ComputedResult

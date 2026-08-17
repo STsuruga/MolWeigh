@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
 from ..core import structure
+from . import theme
 
 _SOURCE_LABELS = {
     "library": "出典: ライブラリ",
@@ -22,27 +23,38 @@ _SOURCE_LABELS = {
 _IMAGE_SIZE = (180, 160)
 
 
-class StructurePanel(QWidget):
+class StructurePanel(QFrame):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setFixedWidth(200)
+        self.setFixedWidth(216)
+        self.setStyleSheet(theme.card_frame_style("StructurePanel"))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+
+        title_label = QLabel("選択中の試薬")
+        title_label.setStyleSheet(f"font-size: 11px; color: {theme.TEXT_MUTED};")
+        layout.addWidget(title_label)
 
         self._image_label = QLabel()
         self._image_label.setFixedSize(*_IMAGE_SIZE)
         self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._image_label.setStyleSheet(
+            f"background: {theme.ACCENT_BG}; border-radius: 10px; "
+            f"color: {theme.TEXT_MUTED}; font-size: 12px;"
+        )
 
         self._name_label = QLabel()
-        self._name_label.setStyleSheet("font-weight: 600;")
+        self._name_label.setStyleSheet(f"font-weight: 600; font-size: 14px; color: {theme.TEXT_PRIMARY};")
         self._name_label.setWordWrap(True)
 
         self._formula_label = QLabel()
-        self._formula_label.setStyleSheet("color: #888780; font-size: 11px;")
+        self._formula_label.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 11px;")
 
         self._source_label = QLabel()
-        self._source_label.setStyleSheet("font-size: 10px; color: #5F5E5A;")
+        self._source_label.setStyleSheet(f"font-size: 10px; color: {theme.TEXT_SECONDARY};")
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("選択中の試薬"))
         layout.addWidget(self._image_label)
         layout.addWidget(self._name_label)
         layout.addWidget(self._formula_label)
