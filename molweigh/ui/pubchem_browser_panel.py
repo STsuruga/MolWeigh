@@ -37,7 +37,7 @@ class PubChemBrowserPanel(QFrame):
         search_row.addWidget(search_button)
 
         self._view = QWebEngineView(self)
-        self._view.setMinimumHeight(420)
+        self._view.setMinimumHeight(200)
         self._view.setUrl(QUrl(PUBCHEM_HOME_URL))
 
         outer = QVBoxLayout(self)

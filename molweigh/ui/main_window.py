@@ -84,16 +84,20 @@ class MainWindow(QMainWindow):
         table_toolbar.addWidget(self._weight_unit_combo)
         table_toolbar.addStretch()
 
-        middle_column = QVBoxLayout()
-        middle_column.setSpacing(16)
-        middle_column.addWidget(self._structure_input_panel, 1)
-        middle_column.addWidget(self._library_grid, 1)
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(16)
+        bottom_row.addWidget(self._library_grid, 1)
+        bottom_row.addWidget(self._pubchem_panel, 1)
+
+        right_column = QVBoxLayout()
+        right_column.setSpacing(16)
+        right_column.addWidget(self._structure_input_panel, 2)
+        right_column.addLayout(bottom_row, 1)
 
         table_row = QHBoxLayout()
         table_row.setSpacing(16)
-        table_row.addWidget(self._reagent_table, 2)
-        table_row.addLayout(middle_column, 1)
-        table_row.addWidget(self._pubchem_panel, 1)
+        table_row.addWidget(self._reagent_table, 3)
+        table_row.addLayout(right_column, 2)
 
         central = QWidget()
         main_layout = QVBoxLayout(central)

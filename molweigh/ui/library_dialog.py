@@ -31,9 +31,9 @@ from ..db import library_repo
 from ..db.library_repo import LibraryEntry
 from . import theme
 
-_CARD_WIDTH = 216
-_CARD_SPACING = 16
-_STRUCTURE_IMAGE_SIZE = (168, 128)
+_CARD_WIDTH = 116
+_CARD_SPACING = 10
+_STRUCTURE_IMAGE_SIZE = (88, 68)
 
 
 class _ResizingScrollArea(QScrollArea):
@@ -110,7 +110,8 @@ class LibraryGridWidget(QWidget):
         self._cards.clear()
 
     def _relayout_grid(self) -> None:
-        columns = max(1, self._scroll_area.viewport().width() // (_CARD_WIDTH + _CARD_SPACING))
+        usable_width = self._scroll_area.viewport().width() - 8  # グリッドの左右マージン(4px×2)
+        columns = max(1, usable_width // (_CARD_WIDTH + _CARD_SPACING))
         while self._grid.count():
             self._grid.takeAt(0)
         for i, card in enumerate(self._cards):
@@ -171,51 +172,51 @@ class _LibraryCard(QFrame):
     def __init__(self, entry: LibraryEntry, parent: QWidget | None = None):
         super().__init__(parent)
         self._entry = entry
-        self.setFixedWidth(216)
+        self.setFixedWidth(_CARD_WIDTH)
         self.setStyleSheet(theme.card_frame_style("_LibraryCard"))
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
 
         self._image_label = QLabel()
         self._image_label.setFixedSize(*_STRUCTURE_IMAGE_SIZE)
         self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._image_label.setStyleSheet(
-            f"background: {theme.ACCENT_BG}; border-radius: 10px; "
-            f"color: {theme.TEXT_MUTED}; font-size: 12px;"
+            f"background: {theme.ACCENT_BG}; border-radius: 6px; "
+            f"color: {theme.TEXT_MUTED}; font-size: 9px;"
         )
         self._set_structure_image(entry)
         layout.addWidget(self._image_label)
 
         name_label = QLabel(entry.name)
-        name_label.setStyleSheet(f"font-weight: 600; font-size: 14px; color: {theme.TEXT_PRIMARY};")
+        name_label.setStyleSheet(f"font-weight: 600; font-size: 11px; color: {theme.TEXT_PRIMARY};")
         name_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         name_label.setWordWrap(True)
         layout.addWidget(name_label)
 
         info_frame = QFrame()
         info_layout = QVBoxLayout(info_frame)
-        info_layout.setContentsMargins(0, 4, 0, 4)
-        info_layout.setSpacing(5)
-        info_layout.addWidget(_info_row("化学式", entry.formula or "—"))
-        info_layout.addWidget(_info_row("CAS No", entry.cas_number or "—"))
-        info_layout.addWidget(_info_row("分子量", f"{entry.molecular_weight:.4g}"))
+        info_layout.setContentsMargins(0, 1, 0, 1)
+        info_layout.setSpacing(1)
+        info_layout.addWidget(_compact_info_row("化学式", entry.formula or "—"))
+        info_layout.addWidget(_compact_info_row("CAS", entry.cas_number or "—"))
+        info_layout.addWidget(_compact_info_row("分子量", f"{entry.molecular_weight:.4g}"))
         info_layout.addWidget(
-            _info_row("比重", f"{entry.density:.4g}" if entry.density is not None else "—")
+            _compact_info_row("比重", f"{entry.density:.4g}" if entry.density is not None else "—")
         )
         layout.addWidget(info_frame)
 
-        button_row = QHBoxLayout()
-        button_row.setSpacing(8)
         self._add_button = QPushButton("追加")
-        self._add_button.setStyleSheet(theme.accent_button_style())
+        self._add_button.setStyleSheet(_compact_button_style(theme.ACCENT, "white", theme.ACCENT_HOVER))
         self._add_button.clicked.connect(lambda: self.add_requested.emit(self._entry))
 
         self._delete_button = QPushButton("削除")
-        self._delete_button.setStyleSheet(theme.danger_ghost_button_style())
+        self._delete_button.setStyleSheet(_compact_button_style("transparent", theme.TEXT_MUTED, theme.DANGER_BG))
         self._delete_button.clicked.connect(lambda: self.delete_requested.emit(self._entry))
 
+        button_row = QHBoxLayout()
+        button_row.setSpacing(4)
         button_row.addWidget(self._add_button, 1)
         button_row.addWidget(self._delete_button, 1)
         layout.addLayout(button_row)
@@ -243,3 +244,33 @@ def _info_row(label: str, value: str) -> QWidget:
     row_layout.addStretch()
     row_layout.addWidget(value_widget)
     return row
+
+
+def _compact_info_row(label: str, value: str) -> QWidget:
+    """コンパクトなライブラリカード向けの、一回り小さいフォントの情報行。"""
+    row = QWidget()
+    row_layout = QHBoxLayout(row)
+    row_layout.setContentsMargins(0, 0, 0, 0)
+    label_widget = QLabel(label)
+    label_widget.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 9px;")
+    value_widget = QLabel(value)
+    value_widget.setStyleSheet(f"color: {theme.TEXT_PRIMARY}; font-size: 10px; font-weight: 500;")
+    row_layout.addWidget(label_widget)
+    row_layout.addStretch()
+    row_layout.addWidget(value_widget)
+    return row
+
+
+def _compact_button_style(background: str, color: str, hover_background: str) -> str:
+    """コンパクトなライブラリカード向けの、一回り小さいパディングのボタンスタイル。"""
+    return f"""
+        QPushButton {{
+            background: {background};
+            color: {color};
+            border: 1px solid {theme.BORDER_STRONG if background == "transparent" else "transparent"};
+            border-radius: 6px;
+            padding: 3px 4px;
+            font-size: 10px;
+        }}
+        QPushButton:hover {{ background: {hover_background}; }}
+    """
