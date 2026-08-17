@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from .db import schema
@@ -13,6 +14,11 @@ from .ui.main_window import MainWindow
 
 
 def main() -> int:
+    # QtWebEngineウィジェット(Ketcher・PubChemパネル・3Dプレビュー等)を使う場合、
+    # QApplication生成前にこの属性を立てることが公式に必須とされている
+    # (環境によってOpenGLコンテキスト共有の設定漏れがWebEngineの描画不具合の
+    # 原因になりうるため)。
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication(sys.argv)
     app.setStyleSheet(theme.APP_STYLESHEET)
     conn = schema.get_connection(get_db_path())

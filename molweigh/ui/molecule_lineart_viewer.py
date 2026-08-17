@@ -17,11 +17,19 @@ from __future__ import annotations
 
 import json
 
+from PySide6.QtCore import QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..core.structure import LineArtMolecule, build_molblock_from_lineart_layout
 from . import theme
+
+# setHtml()にbaseUrlを渡さないと、環境によってはnull origin(opaque origin)
+# 扱いとなり、実行時のセキュリティ制限が変わって描画やスクリプト実行に
+# 影響することがある(実機で「ウィンドウは開くが完全に白紙」という報告あり)。
+# 実際に存在するサーバーである必要はなく、安定したoriginを与えるためだけの
+# ダミーURL。
+_BASE_URL = QUrl("https://molweigh.invalid/")
 
 # --- 幾何処理(回転・正射影・線分交差判定・隠線ギャップ計算)+ 描画 + マウス操作 ---
 # クォータニオンで回転を保持することでジンバルロックを避ける。マウスドラッグの
@@ -288,7 +296,7 @@ class MoleculeLineArtWebView(QWidget):
         html = _HTML_TEMPLATE.format(atoms_json=atoms_json, bonds_json=bonds_json, lineart_js=_LINEART_JS)
 
         self._view = QWebEngineView(self)
-        self._view.setHtml(html)
+        self._view.setHtml(html, _BASE_URL)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
