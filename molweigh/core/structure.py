@@ -10,12 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from rdkit import Chem
-from rdkit.Chem import Descriptors, Draw, rdMolDescriptors
+from rdkit.Chem import Descriptors, rdMolDescriptors
 from rdkit.Geometry import Point3D
 
-from . import structure_3d
+from . import lineart_render, structure_3d
 
 
 @dataclass
@@ -59,22 +61,20 @@ def parse_smiles(smiles: str) -> StructureInfo:
 def render_structure_image(smiles: str, size: tuple[int, int] = (300, 300)) -> QPixmap:
     """SMILES文字列から2D構造式画像を生成し、`QPixmap` として返す。
 
-    トリプチセンのような橋かけ環(bridgehead原子を持つ構造)は、通常の2D
-    レイアウトでは無理に平面化されて環同士が重なり、RDKitが重なり箇所に
-    警告マークを付けてしまうことがある。その場合は3D構造を生成して
-    XY座標をそのまま2Dレイアウトとして使うことで、立体形状が伝わる
-    (奥行きを交差線で表現する)描画にする。
+    ChemDraw風の自前線画レンダラー(`core/lineart_render.py`)で描画する。
+    平面レイアウトが破綻する構造(トリプチセンのような橋かけ環など)は
+    `build_scene(mode="auto")`が自動的に3D配座を正射影した立体線画へ
+    切り替える(奥行きを濃淡と隠線ギャップで表現する)。
     """
-    mol = _mol_from_smiles(smiles)
-    if rdMolDescriptors.CalcNumBridgeheadAtoms(mol) > 0:
-        try:
-            mol = _project_3d_to_2d(smiles)
-        except ValueError:
-            pass
-    pil_image = Draw.MolToImage(mol, size=size).convert("RGBA")
-    data = pil_image.tobytes("raw", "RGBA")
-    qimage = QImage(data, pil_image.width, pil_image.height, QImage.Format.Format_RGBA8888)
-    return QPixmap.fromImage(qimage.copy())
+    scene = lineart_render.build_scene(smiles, mode="auto")
+    svg = lineart_render.render_svg(scene, params=lineart_render.RenderParams(width=size[0], height=size[1]))
+    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+    pixmap = QPixmap(*size)
+    pixmap.fill(Qt.GlobalColor.white)
+    painter = QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    return pixmap
 
 
 def realign_bridged_structure_molblock(smiles: str) -> str | None:
