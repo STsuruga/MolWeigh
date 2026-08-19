@@ -24,9 +24,11 @@
   真っ先に確認すべき事項。憶測だが、線画の見た目の質(線の太さ・隠線ギャップの
   出方)や、`render_mode`(`auto`/`flat`/`solid`)を手動切り替えるUIが
   まだ無いことが候補として考えられる。
-- Win/Mac向けパッケージング(PyInstaller)に着手(今回のセッション後半)。
-  Windows版はローカルビルド・実機動作確認まで完了。進捗は下記
-  「パッケージング/リリース」節を参照。
+- **Win/Mac向けパッケージング(PyInstaller)が完了した**(今回のセッション
+  後半)。Windows版はローカルビルド・実機動作確認まで完了、GitHub Actions
+  CIでWindows/macOS両方のビルドが成功している(成果物: `MolWeigh-windows`/
+  `MolWeigh-macos`)。**まだ実施していないのはGitHub Releaseの作成のみ**
+  (ユーザー確認待ち)。進捗は下記「パッケージング/リリース」節を参照。
 
 ## アーキテクチャの要点(詳細は仕様書1章・4章)
 
@@ -64,7 +66,7 @@ ui/structure_editor.py    Ketcher埋め込み(get_smiles/get_molblock)。
    ファイル単位どころかクラス単位でもまれに落ちる。個々のテストロジックが
    正しいかはテスト単位まで分けて確認すること(仕様書9章に詳細)。
 
-## パッケージング/リリース(進行中)
+## パッケージング/リリース(ビルドは完了、Release作成待ち)
 
 - `molweigh.spec`(PyInstaller仕様)をリポジトリ直下に追加。Ketcherの
   静的ビルド(`molweigh/ui/vendor/ketcher/`、`scripts/build_ketcher.py`で
@@ -95,8 +97,22 @@ ui/structure_editor.py    Ketcher埋め込み(get_smiles/get_molblock)。
   - 上記により、`requests`/HTTPS証明書・`__file__`相対パスのデータファイル
     (Ketcherベンダーディレクトリ・RDKitデータ)・OS別AppDataパス解決という、
     「開発時は動くがexe化すると壊れる」典型的な落とし穴は一通り確認済み。
-  - **未確認**: macOSビルド(物理実機なし、CI実行もまだ)。CDXML連携等
-    未実装機能は対象外。
+  - macOSビルドは物理実機がないため実機動作は未確認だが、CIビルド自体は
+    成功している(GitHub Actions run `32209970484`、両OSとも成功、
+    成果物`MolWeigh-windows`/`MolWeigh-macos`をアップロード済み)。
+    CDXML連携等未実装機能は対象外。
+  - **CI構築で踏んだ地雷**(`scripts/build_ketcher.py`、2件とも修正済み):
+    1. `subprocess.run(["npm", ...])`は`shell=False`だとWindowsで
+       `FileNotFoundError: [WinError 2]`になる。`npm`は`npm.cmd`という
+       シムでCreateProcessが直接実行できないため。`shutil.which()`で
+       解決した実パスを渡すよう修正。ローカルで気づかなかったのは、
+       Ketcherのベンダーディレクトリが既にこのスクリプト以前の方法で
+       作られていて、このスクリプトのnpm呼び出し自体を実行していな
+       かったため。
+    2. GitHub ActionsのWindowsランナーはコンソールが既定でcp1252になって
+       おり、日本語の`print()`が`UnicodeEncodeError`で落ちる。
+       `sys.stdout.reconfigure(encoding="utf-8")`で回避。他のスクリプトで
+       Windows CI上で日本語を`print()`する場合は同じ問題に当たりうる。
   - **窓ターゲティングの罠**: exe化した別プロセスのウィンドウをPowerShellの
     `SetForegroundWindow`で操作しようとした際、`Get-Process`の
     `MainWindowHandle`が安定する前にクリックすると、誤って全く別の
@@ -112,15 +128,12 @@ ui/structure_editor.py    Ketcher埋め込み(get_smiles/get_molblock)。
 
 1. **ユーザーに「分子構造の描画の何が不満か」を具体的に聞く**。曖昧なまま
    手を動かさない。
-2. Win/Macパッケージングの続き(未完了なら)。`git log`/`gh run list`で
-   進捗確認。具体的な残タスク:
-   - `molweigh.spec`・`.github/workflows/build.yml`・このHANDOFF.mdの
-     コミット&プッシュ(このセッションの中断時点でまだなら)。
-   - `gh workflow run build.yml`等でCIをトリガーし、Windows/macOS両方の
-     ビルドが成功するか確認(macOSは実機未検証、CIでの初回確認になる)。
-   - ビルド成果物の確認後、**ユーザーに確認を取ってから**GitHub Releaseを
-     作成する(タグpush・Release作成は公開リポジトリへの可視アクションの
-     ため、都度確認が必要という運用ルールに従う)。
+2. **GitHub Releaseの作成**(唯一の残タスク)。Win/Mac両方のビルドは
+   CIで成功済み(run `32209970484`、成果物`MolWeigh-windows`/
+   `MolWeigh-macos`)。**ユーザーに確認を取ってから**タグ付け・Release
+   作成を行うこと(公開リポジトリへの可視アクションのため、都度確認が
+   必要という運用ルールに従う)。バージョン番号は`molweigh.spec`の
+   `CFBundleShortVersionString`(現在`"0.1.0"`)と合わせて決めること。
 3. `LibraryEntry.render_mode`を手動切り替えるUIが無いこと(仕様書10章に
    既知の制約として記載済み)。不満の正体がこれなら着手候補。
 4. CDXML(ChemDraw)連携は未着手(独立した小機能、仕様書10章参照)。
