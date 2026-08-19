@@ -24,11 +24,11 @@
   真っ先に確認すべき事項。憶測だが、線画の見た目の質(線の太さ・隠線ギャップの
   出方)や、`render_mode`(`auto`/`flat`/`solid`)を手動切り替えるUIが
   まだ無いことが候補として考えられる。
-- **Win/Mac向けパッケージング(PyInstaller)が完了した**(今回のセッション
-  後半)。Windows版はローカルビルド・実機動作確認まで完了、GitHub Actions
-  CIでWindows/macOS両方のビルドが成功している(成果物: `MolWeigh-windows`/
-  `MolWeigh-macos`)。**まだ実施していないのはGitHub Releaseの作成のみ**
-  (ユーザー確認待ち)。進捗は下記「パッケージング/リリース」節を参照。
+- **Win/Mac向けの初回リリース(v0.1.0)を今回のセッションで完了した**。
+  https://github.com/STsuruga/MolWeigh/releases/tag/v0.1.0
+  Windows版はローカルビルド・実機動作確認まで完了、GitHub Actions CIで
+  Windows/macOS両方のビルドが成功し、両OS分のzipをGitHub Releaseに添付
+  済み。進捗は下記「パッケージング/リリース」節を参照。
 
 ## アーキテクチャの要点(詳細は仕様書1章・4章)
 
@@ -66,7 +66,7 @@ ui/structure_editor.py    Ketcher埋め込み(get_smiles/get_molblock)。
    ファイル単位どころかクラス単位でもまれに落ちる。個々のテストロジックが
    正しいかはテスト単位まで分けて確認すること(仕様書9章に詳細)。
 
-## パッケージング/リリース(ビルドは完了、Release作成待ち)
+## パッケージング/リリース(完了 — v0.1.0公開済み)
 
 - `molweigh.spec`(PyInstaller仕様)をリポジトリ直下に追加。Ketcherの
   静的ビルド(`molweigh/ui/vendor/ketcher/`、`scripts/build_ketcher.py`で
@@ -113,6 +113,18 @@ ui/structure_editor.py    Ketcher埋め込み(get_smiles/get_molblock)。
        おり、日本語の`print()`が`UnicodeEncodeError`で落ちる。
        `sys.stdout.reconfigure(encoding="utf-8")`で回避。他のスクリプトで
        Windows CI上で日本語を`print()`する場合は同じ問題に当たりうる。
+    3. **`actions/upload-artifact`はディレクトリをアップロードする際に
+       シンボリックリンクを実体化(コピー)する。** macOSの`.app`バンドル
+       内のQtフレームワークは`Versions/Current -> A`等のシンボリックリンク
+       を多用しており、これが実体化されると本来200MB台のバンドルが
+       3.7GBまで肥大化した(実際に発生し、気づかず初回ダウンロードを
+       試みて2分でタイムアウトしたことで発覚)。対策として`build.yml`の
+       macOSジョブでは`ditto -c -k --sequesterRsrc --keepParent`で
+       ランナー上で先にzip化してから単一ファイルとしてアップロードする
+       よう変更済み(Windows側も`Compress-Archive`で統一)。**ディレクトリ
+       ごとアーティファクトとしてアップロードする設計は避け、必ず
+       ランナー上でアーカイブ化してから単一ファイルをアップロードする方が
+       安全**、というのが得られた教訓。
   - **窓ターゲティングの罠**: exe化した別プロセスのウィンドウをPowerShellの
     `SetForegroundWindow`で操作しようとした際、`Get-Process`の
     `MainWindowHandle`が安定する前にクリックすると、誤って全く別の
@@ -128,12 +140,10 @@ ui/structure_editor.py    Ketcher埋め込み(get_smiles/get_molblock)。
 
 1. **ユーザーに「分子構造の描画の何が不満か」を具体的に聞く**。曖昧なまま
    手を動かさない。
-2. **GitHub Releaseの作成**(唯一の残タスク)。Win/Mac両方のビルドは
-   CIで成功済み(run `32209970484`、成果物`MolWeigh-windows`/
-   `MolWeigh-macos`)。**ユーザーに確認を取ってから**タグ付け・Release
-   作成を行うこと(公開リポジトリへの可視アクションのため、都度確認が
-   必要という運用ルールに従う)。バージョン番号は`molweigh.spec`の
-   `CFBundleShortVersionString`(現在`"0.1.0"`)と合わせて決めること。
+2. パッケージング/リリースは完了。次にリリースする際は、`molweigh.spec`の
+   `CFBundleShortVersionString`とgitタグのバージョン番号を一致させること
+   (今回は両方とも`0.1.0`)。タグ付け・Release作成は公開リポジトリへの
+   可視アクションのため、実行前に必ずユーザーに確認すること。
 3. `LibraryEntry.render_mode`を手動切り替えるUIが無いこと(仕様書10章に
    既知の制約として記載済み)。不満の正体がこれなら着手候補。
 4. CDXML(ChemDraw)連携は未着手(独立した小機能、仕様書10章参照)。
