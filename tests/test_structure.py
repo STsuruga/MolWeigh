@@ -1,13 +1,10 @@
-import numpy as np
 import pytest
 from rdkit import Chem
 
-from molweigh.core import lineart_render, structure_3d
+from molweigh.core import lineart_render
 from molweigh.core.structure import (
-    _min_pairwise_distance_2d,
     build_molblock_from_scene,
     generate_preview_svg,
-    orient_canonically,
     parse_smiles,
     rasterize_svg,
     realign_bridged_structure_molblock,
@@ -123,6 +120,26 @@ class TestRealignBridgedStructureMolblock:
         with pytest.raises(ValueError):
             realign_bridged_structure_molblock("not-a-smiles(((")
 
+    def test_orientation_matches_preview_rendering(self, qapp):
+        # realign_bridged_structure_molblock()(Ketcherへ書き戻す向き)と
+        # generate_preview_svg()/render_structure_image()(カード等の
+        # プレビュー)が別々の向き選択アルゴリズムを使っていると、同じ分子
+        # でも見た目の向きが食い違う(実際にユーザーから報告された不具合)。
+        # 両者ともlineart_render.build_scene(mode="solid")の同一の
+        # canonical_rotationを通る経路に統一したため、原子順序・座標が
+        # (MOLブロックの4桁丸め誤差を除いて)完全に一致するはず。
+        triptycene = "c1ccc2c(c1)C1c3ccccc3C2c2ccccc21"
+        molblock = realign_bridged_structure_molblock(triptycene)
+        scene = lineart_render.build_scene(triptycene, mode="solid")
+        expected_xy = (scene.coords @ scene.initial_rotation.T)[:, :2]
+
+        mol = Chem.MolFromMolBlock(molblock)
+        conformer = mol.GetConformer()
+        for i in range(mol.GetNumAtoms()):
+            pos = conformer.GetAtomPosition(i)
+            assert pos.x == pytest.approx(expected_xy[i, 0], abs=1e-3)
+            assert pos.y == pytest.approx(expected_xy[i, 1], abs=1e-3)
+
 
 class TestBuildMolblockFromScene:
     def test_identity_rotation_matches_scene_xy(self):
@@ -162,39 +179,3 @@ class TestBuildMolblockFromScene:
         identity_block = build_molblock_from_scene(scene, rotation=(1, 0, 0, 0))
         rotated_block = build_molblock_from_scene(scene, rotation=(0.9, 0.3, 0.2, 0.1))
         assert identity_block != rotated_block
-
-
-class TestOrientCanonically:
-    def test_reorients_in_place(self):
-        mol = structure_3d.embed_and_optimize("c1ccc2c(c1)C1c3ccccc3C2c2ccccc21")
-        before = [list(mol.GetConformer().GetAtomPosition(i)) for i in range(mol.GetNumAtoms())]
-        orient_canonically(mol)
-        after = [list(mol.GetConformer().GetAtomPosition(i)) for i in range(mol.GetNumAtoms())]
-        assert before != after
-
-    def test_chooses_best_of_the_three_candidate_axes(self):
-        # 3方向(どの主軸を奥行きにするか)のうち、実際にスコア最大の
-        # 向きが選ばれていることを確認する。
-        mol = structure_3d.embed_and_optimize("c1ccc2c(c1)C1c3ccccc3C2c2ccccc21")
-        heavy_mask = np.array([atom.GetAtomicNum() != 1 for atom in mol.GetAtoms()])
-        conformer = mol.GetConformer()
-        coords = np.array([list(conformer.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())])
-        centered = coords - coords.mean(axis=0)
-        _, eigenvectors = np.linalg.eigh(np.cov(centered[heavy_mask].T))
-
-        candidate_scores = []
-        for depth_axis in range(3):
-            other_axes = [i for i in range(3) if i != depth_axis]
-            rotation = np.column_stack(
-                [eigenvectors[:, other_axes[0]], eigenvectors[:, other_axes[1]], eigenvectors[:, depth_axis]]
-            )
-            if np.linalg.det(rotation) < 0:
-                rotation[:, -1] *= -1
-            candidate_scores.append(_min_pairwise_distance_2d((centered @ rotation)[heavy_mask]))
-        best_candidate_score = max(candidate_scores)
-
-        orient_canonically(mol)
-        rotated = np.array([list(mol.GetConformer().GetAtomPosition(i)) for i in range(mol.GetNumAtoms())])
-        chosen_score = _min_pairwise_distance_2d(rotated[heavy_mask])
-
-        assert chosen_score == pytest.approx(best_candidate_score)

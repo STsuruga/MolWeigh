@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import numpy as np
 from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
@@ -17,7 +16,7 @@ from rdkit import Chem
 from rdkit.Chem import Descriptors, rdMolDescriptors
 from rdkit.Geometry import Point3D
 
-from . import lineart_render, structure_3d
+from . import lineart_render
 
 
 @dataclass
@@ -100,12 +99,19 @@ def realign_bridged_structure_molblock(smiles: str) -> str | None:
     ため、こちらで計算した見やすいレイアウトをMOLブロックとして渡すことで、
     Ketcherのキャンバス上に反映できる。橋かけ構造でない場合は整列が不要
     なのでNoneを返す。
+
+    `lineart_render.build_scene(smiles, mode="solid")`と全く同じ経路
+    (同じ`canonical_rotation`)を通す。以前は`orient_canonically`という
+    別実装のPCAベースの向き選択を使っており、対称分子で固有値が縮退する
+    弱点に加えて、カード等のプレビュー画像(こちらは常に
+    `lineart_render`側のアルゴリズムを使う)と向きが一致しないという
+    実害があったため、経路を一本化した。
     """
     mol = _mol_from_smiles(smiles)
     if rdMolDescriptors.CalcNumBridgeheadAtoms(mol) == 0:
         return None
-    projected = _project_3d_to_2d(smiles)
-    return Chem.MolToMolBlock(projected)
+    scene = lineart_render.build_scene(smiles, mode="solid")
+    return build_molblock_from_scene(scene)
 
 
 def build_molblock_from_scene(scene: lineart_render.Scene, rotation: tuple[float, float, float, float] = (1, 0, 0, 0)) -> str:
@@ -139,72 +145,6 @@ def build_molblock_from_scene(scene: lineart_render.Scene, rotation: tuple[float
     result = mol.GetMol()
     Chem.SanitizeMol(result)
     return Chem.MolToMolBlock(result)
-
-
-def _project_3d_to_2d(smiles: str) -> Chem.Mol:
-    """3D配座のXY座標をそのまま2Dレイアウトとして流用したMolを作る。"""
-    mol_3d = structure_3d.embed_and_optimize(smiles)
-    orient_canonically(mol_3d)
-    mol = Chem.RemoveHs(mol_3d)
-    conformer_3d = mol.GetConformer()
-    conformer_2d = Chem.Conformer(mol.GetNumAtoms())
-    for i in range(mol.GetNumAtoms()):
-        pos = conformer_3d.GetAtomPosition(i)
-        conformer_2d.SetAtomPosition(i, Point3D(pos.x, pos.y, 0.0))
-    conformer_2d.Set3D(False)
-    mol.RemoveAllConformers()
-    mol.AddConformer(conformer_2d, assignId=True)
-    return mol
-
-
-def orient_canonically(mol: Chem.Mol) -> None:
-    """3D座標を回転し、重原子同士が2D投影で最も重なりにくい向きを選ぶ。
-
-    水素原子は結合長が短く常にどの向きでも隣接原子に近いままなので、
-    重なりにくさの評価に含めると水素間の距離だけで決まってしまう。
-    そのため主成分分析・スコア評価とも重原子のみを対象にする(回転自体は
-    全原子に適用する)。主成分分析で得られる3本の主軸のうち、どれを
-    奥行き(Z)に選ぶかで見た目の重なり具合が大きく変わる(分散最小の軸が
-    必ずしも一番綺麗に見えるとは限らない)ため、3通り全てを試し、2D投影
-    した際の重原子間の最小距離が最大になる向きを採用する。
-
-    `_project_3d_to_2d`(橋かけ構造の2D投影、`realign_bridged_structure_molblock`が使う)
-    専用の向き選択アルゴリズム。3Dタブの初期姿勢は別実装
-    (`lineart_render.canonical_rotation`、対称分子でのPCA縮退を避けるため
-    球面サンプリング方式に置き換え済み)を使う。
-    """
-    conformer = mol.GetConformer()
-    coords = np.array([list(conformer.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())])
-    heavy_mask = np.array([atom.GetAtomicNum() != 1 for atom in mol.GetAtoms()])
-    centered = coords - coords.mean(axis=0)
-
-    _, eigenvectors = np.linalg.eigh(np.cov(centered[heavy_mask].T))
-
-    best_rotation, best_score = None, -np.inf
-    for depth_axis in range(3):
-        other_axes = [i for i in range(3) if i != depth_axis]
-        rotation = np.column_stack(
-            [eigenvectors[:, other_axes[0]], eigenvectors[:, other_axes[1]], eigenvectors[:, depth_axis]]
-        )
-        if np.linalg.det(rotation) < 0:
-            rotation[:, -1] *= -1
-        score = _min_pairwise_distance_2d((centered @ rotation)[heavy_mask])
-        if score > best_score:
-            best_score, best_rotation = score, rotation
-
-    rotated = centered @ best_rotation
-    for i in range(mol.GetNumAtoms()):
-        x, y, z = rotated[i]
-        conformer.SetAtomPosition(i, Point3D(float(x), float(y), float(z)))
-
-
-def _min_pairwise_distance_2d(rotated: np.ndarray) -> float:
-    """回転後の座標をXY平面に投影した際の、原子間最小距離(重なりにくさの指標)。"""
-    xy = rotated[:, :2]
-    diffs = xy[:, None, :] - xy[None, :, :]
-    dists = np.sqrt((diffs**2).sum(axis=2))
-    np.fill_diagonal(dists, np.inf)
-    return float(dists.min())
 
 
 def _mol_from_smiles(smiles: str) -> Chem.Mol:
