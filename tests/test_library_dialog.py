@@ -120,6 +120,27 @@ class TestDelete:
         assert library_repo.get(conn, entry_id) is not None
 
 
+class TestRefreshPreview:
+    def test_click_regenerates_and_persists_preview_svg(self, qapp, conn):
+        entry_id = _seed(conn, name="Ethanol", smiles="CCO")
+        grid = LibraryGridWidget(conn)
+        assert library_repo.get(conn, entry_id).preview_svg is None
+
+        _cards(grid)[0]._refresh_button.click()
+
+        saved = library_repo.get(conn, entry_id)
+        assert saved.preview_svg is not None
+        assert saved.preview_svg.startswith("<svg")
+
+    def test_no_smiles_does_nothing(self, qapp, conn):
+        entry_id = _seed(conn, name="No structure", smiles=None)
+        grid = LibraryGridWidget(conn)
+
+        _cards(grid)[0]._refresh_button.click()
+
+        assert library_repo.get(conn, entry_id).preview_svg is None
+
+
 class TestAddNewRequested:
     def test_button_click_emits_signal(self, qapp, conn):
         grid = LibraryGridWidget(conn)

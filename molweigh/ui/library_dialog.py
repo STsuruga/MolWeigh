@@ -32,7 +32,7 @@ from ..db.library_repo import LibraryEntry
 from . import theme
 
 _CARD_WIDTH = 138
-_CARD_HEIGHT = 240
+_CARD_HEIGHT = 272
 _CARD_SPACING = 10
 _STRUCTURE_IMAGE_SIZE = (110, 85)
 _NAME_LABEL_HEIGHT = 36
@@ -100,6 +100,7 @@ class LibraryGridWidget(QWidget):
             card = _LibraryCard(entry)
             card.add_requested.connect(self._on_add)
             card.delete_requested.connect(self._on_delete)
+            card.refresh_preview_requested.connect(self._on_refresh_preview)
             self._cards.append(card)
         self._relayout_grid()
 
@@ -133,6 +134,16 @@ class LibraryGridWidget(QWidget):
         if confirm != QMessageBox.StandardButton.Yes:
             return
         library_repo.delete(self._conn, entry.id)
+        self.refresh()
+
+    def _on_refresh_preview(self, entry: LibraryEntry) -> None:
+        if not entry.smiles:
+            return
+        try:
+            entry.preview_svg = structure.generate_preview_svg(entry.smiles, entry.render_mode)
+        except ValueError:
+            return
+        library_repo.update(self._conn, entry)
         self.refresh()
 
 
@@ -170,6 +181,7 @@ class _LibraryCard(QFrame):
 
     add_requested = Signal(object)
     delete_requested = Signal(object)
+    refresh_preview_requested = Signal(object)
 
     def __init__(self, entry: LibraryEntry, parent: QWidget | None = None):
         super().__init__(parent)
@@ -224,7 +236,16 @@ class _LibraryCard(QFrame):
         button_row.addWidget(self._delete_button, 1)
         layout.addLayout(button_row)
 
+        self._refresh_button = QPushButton("プレビューを更新")
+        self._refresh_button.setStyleSheet(_compact_button_style("transparent", theme.TEXT_MUTED, theme.ACCENT_BG))
+        self._refresh_button.setToolTip("構造式から画像を再生成して保存し直します")
+        self._refresh_button.clicked.connect(lambda: self.refresh_preview_requested.emit(self._entry))
+        layout.addWidget(self._refresh_button)
+
     def _set_structure_image(self, entry: LibraryEntry) -> None:
+        if entry.preview_svg:
+            self._image_label.setPixmap(structure.rasterize_svg(entry.preview_svg, _STRUCTURE_IMAGE_SIZE))
+            return
         if entry.smiles:
             try:
                 pixmap = structure.render_structure_image(entry.smiles, size=_STRUCTURE_IMAGE_SIZE)

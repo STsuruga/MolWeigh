@@ -35,6 +35,14 @@ _MIGRATIONS: list[str] = [
         updated_at TEXT NOT NULL
     );
     """,
+    # version 2: 構造式プレビューのSVGをキャッシュし、平面/立体モードの
+    # ユーザー選択を保存する(core/lineart_render.py参照)。既存レコードは
+    # preview_svgがNULLのままrender_structure_image()がオンザフライで
+    # 生成する経路にフォールバックするため、一括再生成は不要。
+    """
+    ALTER TABLE library ADD COLUMN preview_svg TEXT;
+    ALTER TABLE library ADD COLUMN render_mode TEXT NOT NULL DEFAULT 'auto';
+    """,
 ]
 
 

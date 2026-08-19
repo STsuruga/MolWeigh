@@ -46,6 +46,18 @@ class TestCreateAndGet:
     def test_get_missing_returns_none(self, conn):
         assert library_repo.get(conn, 9999) is None
 
+    def test_preview_svg_and_render_mode_defaults(self, conn):
+        entry_id = library_repo.create(conn, _make_entry())
+        fetched = library_repo.get(conn, entry_id)
+        assert fetched.preview_svg is None
+        assert fetched.render_mode == "auto"
+
+    def test_preview_svg_and_render_mode_persisted(self, conn):
+        entry_id = library_repo.create(conn, _make_entry(preview_svg="<svg></svg>", render_mode="solid"))
+        fetched = library_repo.get(conn, entry_id)
+        assert fetched.preview_svg == "<svg></svg>"
+        assert fetched.render_mode == "solid"
+
 
 class TestListAndSearch:
     def test_list_all_sorted_by_name(self, conn):
@@ -87,6 +99,16 @@ class TestUpdate:
     def test_update_without_id_raises(self, conn):
         with pytest.raises(ValueError):
             library_repo.update(conn, _make_entry(id=None))
+
+    def test_update_persists_preview_svg_and_render_mode(self, conn):
+        entry_id = library_repo.create(conn, _make_entry())
+        entry = library_repo.get(conn, entry_id)
+        entry.preview_svg = "<svg>updated</svg>"
+        entry.render_mode = "flat"
+        library_repo.update(conn, entry)
+        refreshed = library_repo.get(conn, entry_id)
+        assert refreshed.preview_svg == "<svg>updated</svg>"
+        assert refreshed.render_mode == "flat"
 
 
 class TestIncrementUseCount:

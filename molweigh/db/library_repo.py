@@ -20,6 +20,8 @@ class LibraryEntry:
     use_count: int = 0
     created_at: str = ""
     updated_at: str = ""
+    preview_svg: str | None = None
+    render_mode: str = "auto"
 
 
 def _now_iso() -> str:
@@ -33,12 +35,13 @@ def create(conn: sqlite3.Connection, entry: LibraryEntry) -> int:
         """
         INSERT INTO library
             (name, cas_number, formula, molecular_weight, density, smiles,
-             source, use_count, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             source, use_count, created_at, updated_at, preview_svg, render_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             entry.name, entry.cas_number, entry.formula, entry.molecular_weight,
             entry.density, entry.smiles, entry.source, entry.use_count, now, now,
+            entry.preview_svg, entry.render_mode,
         ),
     )
     conn.commit()
@@ -78,13 +81,14 @@ def update(conn: sqlite3.Connection, entry: LibraryEntry) -> None:
         """
         UPDATE library
         SET name = ?, cas_number = ?, formula = ?, molecular_weight = ?,
-            density = ?, smiles = ?, source = ?, use_count = ?, updated_at = ?
+            density = ?, smiles = ?, source = ?, use_count = ?, updated_at = ?,
+            preview_svg = ?, render_mode = ?
         WHERE id = ?
         """,
         (
             entry.name, entry.cas_number, entry.formula, entry.molecular_weight,
             entry.density, entry.smiles, entry.source, entry.use_count,
-            _now_iso(), entry.id,
+            _now_iso(), entry.preview_svg, entry.render_mode, entry.id,
         ),
     )
     conn.commit()
@@ -116,4 +120,6 @@ def _row_to_entry(row: sqlite3.Row) -> LibraryEntry:
         use_count=row["use_count"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        preview_svg=row["preview_svg"],
+        render_mode=row["render_mode"],
     )
