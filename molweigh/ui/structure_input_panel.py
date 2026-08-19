@@ -3,21 +3,27 @@
 起動時からKetcherを読み込んで常時表示する。「分子量を計算」ボタンで
 描いた構造式の化学式・分子量をその場で確認でき(「試薬に追加」を押す
 前でも見える)、「試薬に追加」ボタンで計算テーブルへ反映できる。
+
+「2D編集」「3D」のタブを切り替えて使う。3Dタブに切り替えると、Ketcherの
+MOLブロック(楔形つき)から3D配座をバックグラウンドで生成し、QPainter
+直描きの`Molecule3DView`で表示する(`ui/structure_3d_tab.py`)。
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget
 
 from ..core import compound_source, structure
 from . import theme
-from .molecule_3d_web_viewer import Molecule3DNotBundledError, Molecule3DWebDialog
+from .structure_3d_tab import Structure3DTab
 from .structure_editor import KetcherNotBundledError, KetcherView
 
 _SIDE_COLUMN_WIDTH = 150
 _INFO_FRAME_HEIGHT = 100
 _ERROR_LABEL_HEIGHT = 48
+_TAB_2D_INDEX = 0
+_TAB_3D_INDEX = 1
 
 
 class StructureInputPanel(QFrame):
@@ -33,14 +39,17 @@ class StructureInputPanel(QFrame):
         title_label = QLabel("構造入力")
         title_label.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {theme.TEXT_PRIMARY};")
 
-        self._ketcher_container = QVBoxLayout()
-        self._ketcher_container.setContentsMargins(0, 0, 0, 0)
+        self._tabs = QTabWidget()
         try:
             self._ketcher = KetcherView(self)
             self._ketcher.setMinimumHeight(320)
-            self._ketcher_container.addWidget(self._ketcher)
+            self._tabs.addTab(self._ketcher, "2D編集")
         except KetcherNotBundledError as exc:
-            self._ketcher_container.addWidget(QLabel(str(exc)))
+            self._tabs.addTab(QLabel(str(exc)), "2D編集")
+
+        self._tab_3d = Structure3DTab(on_reflect=self._on_reflect_from_3d)
+        self._tabs.addTab(self._tab_3d, "3D")
+        self._tabs.currentChanged.connect(self._on_tab_changed)
 
         info_frame = QFrame()
         info_frame.setFixedSize(_SIDE_COLUMN_WIDTH, _INFO_FRAME_HEIGHT)
@@ -70,13 +79,6 @@ class StructureInputPanel(QFrame):
         self._add_button.setStyleSheet(theme.accent_button_style())
         self._add_button.clicked.connect(self._on_add_to_table)
 
-        self._preview_3d_button = QPushButton("3Dプレビュー")
-        self._preview_3d_button.setMaximumWidth(_SIDE_COLUMN_WIDTH)
-        self._preview_3d_button.setToolTip(
-            "RDKitでエネルギー最小化した3D構造を表示します(2D構造には反映されません)"
-        )
-        self._preview_3d_button.clicked.connect(self._on_preview_3d)
-
         self._realign_button = QPushButton("橋かけ構造を整列")
         self._realign_button.setMaximumWidth(_SIDE_COLUMN_WIDTH)
         self._realign_button.setToolTip(
@@ -98,13 +100,12 @@ class StructureInputPanel(QFrame):
         side_column.addWidget(self._error_label)
         side_column.addStretch(1)
         side_column.addWidget(self._calc_button)
-        side_column.addWidget(self._preview_3d_button)
         side_column.addWidget(self._realign_button)
         side_column.addWidget(self._add_button)
 
         content_row = QHBoxLayout()
         content_row.setSpacing(16)
-        content_row.addLayout(self._ketcher_container, 1)
+        content_row.addWidget(self._tabs, 1)
         content_row.addLayout(side_column)
 
         outer = QVBoxLayout(self)
@@ -137,30 +138,29 @@ class StructureInputPanel(QFrame):
             self._update_info_labels(info)
             self.added_to_table.emit(info)
 
-    def _on_preview_3d(self) -> None:
+    def _on_tab_changed(self, index: int) -> None:
+        if index != _TAB_3D_INDEX:
+            return
         if self._ketcher is None:
-            self._show_error("構造式エディタが利用できません。")
+            self._tab_3d.show_error("構造式エディタが利用できません。")
             return
-        self._error_label.setText("")
-        self._ketcher.get_smiles(self._on_smiles_for_3d)
+        self._ketcher.get_molblock(self._on_molblock_for_3d)
 
-    def _on_smiles_for_3d(self, smiles: str | None) -> None:
-        if not smiles:
-            self._show_error("構造式が空です。原子を配置してください。")
+    def _on_molblock_for_3d(self, molblock: str | None) -> None:
+        if not molblock:
+            self._tab_3d.show_error("構造式が空です。原子を配置してください。")
             return
         try:
-            molblock, view_data = structure.generate_3d_view(smiles)
+            smiles = structure.smiles_from_molblock(molblock)
         except ValueError as exc:
-            self._show_error(str(exc))
+            self._tab_3d.show_error(str(exc))
             return
-        try:
-            dialog = Molecule3DWebDialog(molblock, view_data, smiles, self)
-        except Molecule3DNotBundledError as exc:
-            self._show_error(str(exc))
-            return
-        dialog.exec()
-        if dialog.molblock_to_apply is not None and self._ketcher is not None:
-            self._ketcher.set_smiles(dialog.molblock_to_apply)
+        self._tab_3d.request_build(smiles)
+
+    def _on_reflect_from_3d(self, molblock: str) -> None:
+        if self._ketcher is not None:
+            self._ketcher.set_smiles(molblock)
+        self._tabs.setCurrentIndex(_TAB_2D_INDEX)
 
     def _on_realign(self) -> None:
         if self._ketcher is None:
@@ -201,6 +201,7 @@ class StructureInputPanel(QFrame):
         self._error_label.setText(message)
 
     def shutdown(self) -> None:
-        """メインウィンドウを閉じる際に呼び、Ketcherのローカルサーバーを止める。"""
+        """メインウィンドウを閉じる際に呼び、Ketcherのローカルサーバーと3D配座生成スレッドを止める。"""
         if self._ketcher is not None:
             self._ketcher.shutdown()
+        self._tab_3d.shutdown()

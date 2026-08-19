@@ -22,6 +22,7 @@ def dialog(qapp, conn):
     yield d
     if d._ketcher is not None:
         d._ketcher.shutdown()
+    d._tab_3d.shutdown()
 
 
 class TestFormulaEntry:
@@ -64,55 +65,41 @@ class TestStructureEntry:
         assert warnings
 
 
-class TestPreview3D:
-    def test_empty_smiles_shows_warning(self, dialog, monkeypatch):
-        warnings = []
-        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
-        dialog._on_smiles_for_3d(None)
-        assert warnings
+class TestStructure3DTabWiring:
+    def test_empty_molblock_shows_error_in_3d_tab(self, dialog):
+        dialog._on_molblock_for_3d(None)
+        assert dialog._tab_3d._status_label.text() != ""
 
-    def test_invalid_smiles_shows_warning(self, dialog, monkeypatch):
-        warnings = []
-        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
-        dialog._on_smiles_for_3d("not-a-smiles(((")
-        assert warnings
+    def test_invalid_molblock_shows_error_in_3d_tab(self, dialog):
+        dialog._on_molblock_for_3d("not a molblock")
+        assert dialog._tab_3d._status_label.text() != ""
 
-    def test_valid_smiles_opens_dialog(self, dialog, monkeypatch):
-        opened = []
-        monkeypatch.setattr(
-            "molweigh.ui.reagent_editor_dialog.Molecule3DWebDialog",
-            lambda molblock, view_data, smiles, parent: opened.append((molblock, view_data, smiles))
-            or _FakeDialog(),
-        )
-        dialog._on_smiles_for_3d("CCO")
-        assert len(opened) == 1
-        assert "V2000" in opened[0][0]
-        assert len(opened[0][1].atoms) == 3
-        assert opened[0][2] == "CCO"
+    def test_valid_molblock_starts_3d_build(self, dialog, monkeypatch):
+        requested = []
+        monkeypatch.setattr(dialog._tab_3d, "request_build", lambda smiles: requested.append(smiles))
 
-    def test_reflect_result_is_applied_to_ketcher(self, dialog, monkeypatch):
-        monkeypatch.setattr(
-            "molweigh.ui.reagent_editor_dialog.Molecule3DWebDialog",
-            lambda molblock, view_data, smiles, parent: _FakeDialog(molblock_to_apply="fake molblock"),
-        )
+        from rdkit import Chem
+
+        molblock = Chem.MolToMolBlock(Chem.MolFromSmiles("CCO"))
+        dialog._on_molblock_for_3d(molblock)
+
+        assert requested == ["CCO"]
+
+    def test_switching_to_3d_tab_requests_molblock_from_ketcher(self, dialog, monkeypatch):
+        requested = []
+        monkeypatch.setattr(dialog._ketcher, "get_molblock", lambda callback: requested.append(callback))
+        dialog._on_tab_changed(1)
+        assert len(requested) == 1
+
+    def test_reflect_from_3d_applies_to_ketcher_and_switches_tab(self, dialog):
         received = []
-        monkeypatch.setattr(dialog._ketcher, "set_smiles", lambda text: received.append(text))
-        dialog._on_smiles_for_3d("CCO")
+        dialog._ketcher.set_smiles = lambda text: received.append(text)
+        dialog._tabs.setCurrentIndex(1)
+
+        dialog._on_reflect_from_3d("fake molblock")
+
         assert received == ["fake molblock"]
-
-    def test_not_bundled_shows_warning(self, dialog, monkeypatch):
-        from molweigh.ui.molecule_3d_web_viewer import Molecule3DNotBundledError
-
-        warnings = []
-        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
-        monkeypatch.setattr(
-            "molweigh.ui.reagent_editor_dialog.Molecule3DWebDialog",
-            lambda molblock, view_data, smiles, parent: (_ for _ in ()).throw(
-                Molecule3DNotBundledError("not bundled")
-            ),
-        )
-        dialog._on_smiles_for_3d("CCO")
-        assert warnings
+        assert dialog._tabs.currentIndex() == 0
 
 
 class TestRealign:
@@ -140,14 +127,6 @@ class TestRealign:
         dialog._on_smiles_for_realign("c1ccc2c(c1)C1c3ccccc3C2c2ccccc21")
         assert len(received) == 1
         assert "V2000" in received[0]
-
-
-class _FakeDialog:
-    def __init__(self, molblock_to_apply=None):
-        self.molblock_to_apply = molblock_to_apply
-
-    def exec(self):
-        return None
 
 
 class TestPreviewUpdates:
@@ -217,3 +196,18 @@ class TestSave:
         dialog._on_save()
         saved = library_repo.get(conn, dialog.library_id)
         assert saved.smiles == "CCO"
+
+    def test_preview_svg_is_baked_and_persisted_when_structure_drawn(self, dialog, conn):
+        dialog._on_smiles_received("CCO")
+        dialog._name_input.setText("Ethanol")
+        dialog._on_save()
+        saved = library_repo.get(conn, dialog.library_id)
+        assert saved.preview_svg is not None
+        assert saved.preview_svg.startswith("<svg")
+
+    def test_preview_svg_is_none_without_structure(self, dialog, conn):
+        dialog._name_input.setText("X")
+        dialog._mw_input.setValue(100.0)
+        dialog._on_save()
+        saved = library_repo.get(conn, dialog.library_id)
+        assert saved.preview_svg is None

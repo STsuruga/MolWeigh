@@ -36,6 +36,12 @@ window.ketcher.getSmiles()
     .then(function (smiles) { window.__molweighResult = smiles; })
     .catch(function () { window.__molweighResult = null; });
 """
+_GET_MOLFILE_JS = """
+window.__molweighResult = undefined;
+window.ketcher.getMolfile()
+    .then(function (molfile) { window.__molweighResult = molfile; })
+    .catch(function () { window.__molweighResult = null; });
+"""
 _POLL_JS = (
     "typeof window.__molweighResult !== 'undefined' "
     "? window.__molweighResult : '__molweigh_pending__'"
@@ -82,20 +88,32 @@ class KetcherView(QWidget):
 
     def get_smiles(self, callback: Callable[[str | None], None]) -> None:
         """現在描画されている構造式のSMILESを非同期取得し、`callback(smiles または None)` を呼ぶ。"""
-        self._pending_callback = callback
-        self._view.page().runJavaScript(_GET_SMILES_JS)
-        self._poll_ticks = 0
-        QTimer.singleShot(_POLL_INTERVAL_MS, self._poll_for_smiles)
+        self._start_poll(_GET_SMILES_JS, callback)
+
+    def get_molblock(self, callback: Callable[[str | None], None]) -> None:
+        """現在描画されている構造式のMOLブロック(2D座標・楔形つき)を非同期取得する。
+
+        SMILES経由だとKetcher上でユーザーが整えた原子配置や楔形が失われ、
+        再取得のたびにRDKit側の2Dレイアウトへ置き換わってしまう。平面モードで
+        「ユーザーが描いた通り」を描画したい場合はこちらを使う。
+        """
+        self._start_poll(_GET_MOLFILE_JS, callback)
 
     def set_smiles(self, smiles: str) -> None:
-        """既存のSMILESをKetcherの画面に反映する(編集時の初期表示用)。"""
+        """既存のSMILES(またはMOLブロック)をKetcherの画面に反映する(編集時の初期表示用)。"""
         script = f"window.ketcher && window.ketcher.setMolecule({json.dumps(smiles)});"
         self._view.page().runJavaScript(script)
 
     def shutdown(self) -> None:
         self._server.shutdown()
 
-    def _poll_for_smiles(self) -> None:
+    def _start_poll(self, js: str, callback: Callable[[str | None], None]) -> None:
+        self._pending_callback = callback
+        self._view.page().runJavaScript(js)
+        self._poll_ticks = 0
+        QTimer.singleShot(_POLL_INTERVAL_MS, self._poll_for_result)
+
+    def _poll_for_result(self) -> None:
         self._poll_ticks += 1
         if self._poll_ticks > _POLL_TIMEOUT_TICKS:
             self._resolve(None)
@@ -104,9 +122,13 @@ class KetcherView(QWidget):
 
     def _on_poll_result(self, value: object) -> None:
         if value == "__molweigh_pending__":
-            QTimer.singleShot(_POLL_INTERVAL_MS, self._poll_for_smiles)
+            QTimer.singleShot(_POLL_INTERVAL_MS, self._poll_for_result)
             return
-        self._resolve(value.strip() if isinstance(value, str) and value.strip() else None)
+        # MOLブロックは1行目(分子名、空でもよい)が構造上意味を持つ位置にある
+        # ため、先頭の空白/改行を落とす.strip()は使えない(3行あるはずの
+        # ヘッダが2行に潰れ、以降の行がすべて1行分ズレてパース不能になる)。
+        # 末尾の余分な改行だけを.rstrip()で取り除く。
+        self._resolve(value.rstrip() if isinstance(value, str) and value.strip() else None)
 
     def _resolve(self, smiles: str | None) -> None:
         callback, self._pending_callback = self._pending_callback, None

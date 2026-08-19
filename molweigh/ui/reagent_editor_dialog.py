@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -30,9 +31,12 @@ from ..db import library_repo
 from ..db.library_repo import LibraryEntry
 from . import theme
 from .library_dialog import _info_row
-from .molecule_3d_web_viewer import Molecule3DNotBundledError, Molecule3DWebDialog
 from .pubchem_browser_panel import PubChemBrowserPanel
+from .structure_3d_tab import Structure3DTab
 from .structure_editor import KetcherNotBundledError, KetcherView
+
+_TAB_2D_INDEX = 0
+_TAB_3D_INDEX = 1
 
 _STRUCTURE_IMAGE_SIZE = (168, 128)
 
@@ -126,23 +130,20 @@ class ReagentEditorDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        self._ketcher_container = QVBoxLayout()
-        self._ketcher_container.setContentsMargins(0, 0, 0, 0)
+        self._tabs = QTabWidget()
         try:
             self._ketcher = KetcherView()
             self._ketcher.setMinimumHeight(320)
-            self._ketcher_container.addWidget(self._ketcher)
+            self._tabs.addTab(self._ketcher, "2D編集")
         except KetcherNotBundledError as exc:
-            self._ketcher_container.addWidget(QLabel(str(exc)))
+            self._tabs.addTab(QLabel(str(exc)), "2D編集")
+
+        self._tab_3d = Structure3DTab(on_reflect=self._on_reflect_from_3d)
+        self._tabs.addTab(self._tab_3d, "3D")
+        self._tabs.currentChanged.connect(self._on_tab_changed)
 
         apply_structure_button = QPushButton("構造式を反映")
         apply_structure_button.clicked.connect(self._on_apply_structure)
-
-        preview_3d_button = QPushButton("3Dプレビュー")
-        preview_3d_button.setToolTip(
-            "RDKitでエネルギー最小化した3D構造を表示します(2D構造には反映されません)"
-        )
-        preview_3d_button.clicked.connect(self._on_preview_3d)
 
         realign_button = QPushButton("橋かけ構造を整列")
         realign_button.setToolTip("トリプチセンのような橋かけ構造を、重なりにくい向きに描き直します")
@@ -150,7 +151,6 @@ class ReagentEditorDialog(QDialog):
 
         structure_button_row = QHBoxLayout()
         structure_button_row.addWidget(apply_structure_button)
-        structure_button_row.addWidget(preview_3d_button)
         structure_button_row.addWidget(realign_button)
 
         self._name_input = QLineEdit()
@@ -177,7 +177,7 @@ class ReagentEditorDialog(QDialog):
         self._density_input.setSpecialValueText("—")
         self._density_input.valueChanged.connect(self._update_preview)
 
-        layout.addLayout(self._ketcher_container, 1)
+        layout.addWidget(self._tabs, 1)
         layout.addLayout(structure_button_row)
         layout.addWidget(_field_row("化合物名", self._name_input))
         layout.addWidget(_field_row("CAS No", self._cas_input))
@@ -200,29 +200,29 @@ class ReagentEditorDialog(QDialog):
             return
         self._ketcher.get_smiles(self._on_smiles_received)
 
-    def _on_preview_3d(self) -> None:
+    def _on_tab_changed(self, index: int) -> None:
+        if index != _TAB_3D_INDEX:
+            return
         if self._ketcher is None:
-            QMessageBox.warning(self, "3Dプレビュー", "構造式エディタが利用できません。")
+            self._tab_3d.show_error("構造式エディタが利用できません。")
             return
-        self._ketcher.get_smiles(self._on_smiles_for_3d)
+        self._ketcher.get_molblock(self._on_molblock_for_3d)
 
-    def _on_smiles_for_3d(self, smiles: str | None) -> None:
-        if not smiles:
-            QMessageBox.warning(self, "3Dプレビュー", "構造式が空です。原子を配置してください。")
+    def _on_molblock_for_3d(self, molblock: str | None) -> None:
+        if not molblock:
+            self._tab_3d.show_error("構造式が空です。原子を配置してください。")
             return
         try:
-            molblock, view_data = structure.generate_3d_view(smiles)
+            smiles = structure.smiles_from_molblock(molblock)
         except ValueError as exc:
-            QMessageBox.warning(self, "3Dプレビュー", str(exc))
+            self._tab_3d.show_error(str(exc))
             return
-        try:
-            dialog = Molecule3DWebDialog(molblock, view_data, smiles, self)
-        except Molecule3DNotBundledError as exc:
-            QMessageBox.warning(self, "3Dプレビュー", str(exc))
-            return
-        dialog.exec()
-        if dialog.molblock_to_apply is not None and self._ketcher is not None:
-            self._ketcher.set_smiles(dialog.molblock_to_apply)
+        self._tab_3d.request_build(smiles)
+
+    def _on_reflect_from_3d(self, molblock: str) -> None:
+        if self._ketcher is not None:
+            self._ketcher.set_smiles(molblock)
+        self._tabs.setCurrentIndex(_TAB_2D_INDEX)
 
     def _on_realign(self) -> None:
         if self._ketcher is None:
@@ -306,6 +306,13 @@ class ReagentEditorDialog(QDialog):
             QMessageBox.warning(self, "化合物を登録", "分子量が未設定です。構造式または化学式を入力してください。")
             return
 
+        preview_svg = None
+        if self._smiles:
+            try:
+                preview_svg = structure.generate_preview_svg(self._smiles)
+            except ValueError:
+                pass
+
         entry = LibraryEntry(
             id=None,
             name=name,
@@ -315,6 +322,7 @@ class ReagentEditorDialog(QDialog):
             density=self._density_input.value() or None,
             smiles=self._smiles,
             source="manual",
+            preview_svg=preview_svg,
         )
         self.library_id = library_repo.create(self._conn, entry)
         self.accept()
@@ -322,6 +330,7 @@ class ReagentEditorDialog(QDialog):
     def done(self, result: int) -> None:
         if self._ketcher is not None:
             self._ketcher.shutdown()
+        self._tab_3d.shutdown()
         super().done(result)
 
 

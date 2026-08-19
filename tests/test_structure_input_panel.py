@@ -91,72 +91,71 @@ class TestShutdown:
         panel.shutdown()
 
 
-class TestPreview3D:
-    def test_empty_smiles_shows_error(self, qapp):
+class TestStructure3DTabWiring:
+    def test_empty_molblock_shows_error_in_3d_tab(self, qapp):
         panel = StructureInputPanel()
-        panel._on_smiles_for_3d(None)
-        assert panel._error_label.text() != ""
+        panel._on_molblock_for_3d(None)
+        assert panel._tab_3d._status_label.text() != ""
         panel.shutdown()
 
-    def test_invalid_smiles_shows_error(self, qapp):
+    def test_invalid_molblock_shows_error_in_3d_tab(self, qapp):
         panel = StructureInputPanel()
-        panel._on_smiles_for_3d("not-a-smiles(((")
-        assert panel._error_label.text() != ""
+        panel._on_molblock_for_3d("not a molblock")
+        assert panel._tab_3d._status_label.text() != ""
         panel.shutdown()
 
-    def test_valid_smiles_opens_dialog(self, qapp, monkeypatch):
+    def test_valid_molblock_starts_3d_build(self, qapp, monkeypatch):
         panel = StructureInputPanel()
-        opened = []
-        monkeypatch.setattr(
-            "molweigh.ui.structure_input_panel.Molecule3DWebDialog",
-            lambda molblock, view_data, smiles, parent: opened.append((molblock, view_data, smiles))
-            or _FakeDialog(),
-        )
+        requested = []
+        monkeypatch.setattr(panel._tab_3d, "request_build", lambda smiles: requested.append(smiles))
 
-        panel._on_smiles_for_3d("CCO")
+        from rdkit import Chem
 
-        assert len(opened) == 1
-        assert "V2000" in opened[0][0]
-        assert len(opened[0][1].atoms) == 3
-        assert opened[0][2] == "CCO"
-        assert panel._error_label.text() == ""
+        molblock = Chem.MolToMolBlock(Chem.MolFromSmiles("CCO"))
+        panel._on_molblock_for_3d(molblock)
+
+        assert len(requested) == 1
+        assert requested[0] == "CCO"
         panel.shutdown()
 
-    def test_reflect_result_is_applied_to_ketcher(self, qapp, monkeypatch):
+    def test_switching_to_3d_tab_requests_molblock_from_ketcher(self, qapp, monkeypatch):
         panel = StructureInputPanel()
-        monkeypatch.setattr(
-            "molweigh.ui.structure_input_panel.Molecule3DWebDialog",
-            lambda molblock, view_data, smiles, parent: _FakeDialog(molblock_to_apply="fake molblock"),
-        )
+        requested = []
+        monkeypatch.setattr(panel._ketcher, "get_molblock", lambda callback: requested.append(callback))
+
+        panel._on_tab_changed(1)
+
+        assert len(requested) == 1
+        panel.shutdown()
+
+    def test_switching_to_2d_tab_does_nothing(self, qapp, monkeypatch):
+        panel = StructureInputPanel()
+        requested = []
+        monkeypatch.setattr(panel._ketcher, "get_molblock", lambda callback: requested.append(callback))
+
+        panel._on_tab_changed(0)
+
+        assert requested == []
+        panel.shutdown()
+
+    def test_reflect_from_3d_applies_to_ketcher_and_switches_tab(self, qapp):
+        panel = StructureInputPanel()
         received = []
-        monkeypatch.setattr(panel._ketcher, "set_smiles", lambda text: received.append(text))
+        panel._ketcher.set_smiles = lambda text: received.append(text)
+        panel._tabs.setCurrentIndex(1)
 
-        panel._on_smiles_for_3d("CCO")
+        panel._on_reflect_from_3d("fake molblock")
 
         assert received == ["fake molblock"]
+        assert panel._tabs.currentIndex() == 0
         panel.shutdown()
 
-    def test_not_bundled_shows_error(self, qapp, monkeypatch):
-        from molweigh.ui.molecule_3d_web_viewer import Molecule3DNotBundledError
-
-        panel = StructureInputPanel()
-        monkeypatch.setattr(
-            "molweigh.ui.structure_input_panel.Molecule3DWebDialog",
-            lambda molblock, view_data, smiles, parent: (_ for _ in ()).throw(
-                Molecule3DNotBundledError("not bundled")
-            ),
-        )
-
-        panel._on_smiles_for_3d("CCO")
-
-        assert panel._error_label.text() != ""
-        panel.shutdown()
-
-    def test_without_ketcher_shows_error(self, qapp, monkeypatch, tmp_path):
+    def test_without_ketcher_shows_error_in_3d_tab(self, qapp, monkeypatch, tmp_path):
         monkeypatch.setattr(structure_editor, "_VENDOR_DIR", tmp_path / "missing")
         panel = StructureInputPanel()
-        panel._on_preview_3d()
-        assert panel._error_label.text() != ""
+        panel._on_tab_changed(1)
+        assert panel._tab_3d._status_label.text() != ""
+        panel.shutdown()
 
 
 class TestRealign:
@@ -195,11 +194,3 @@ class TestRealign:
         panel = StructureInputPanel()
         panel._on_realign()
         assert panel._error_label.text() != ""
-
-
-class _FakeDialog:
-    def __init__(self, molblock_to_apply=None):
-        self.molblock_to_apply = molblock_to_apply
-
-    def exec(self):
-        return None
