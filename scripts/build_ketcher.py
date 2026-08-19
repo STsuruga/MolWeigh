@@ -21,8 +21,13 @@ VENDOR_DIR = REPO_ROOT / "molweigh" / "ui" / "vendor" / "ketcher"
 
 
 def run(cmd: list[str], cwd: Path) -> None:
+    # Windowsではnpm/npxが.cmdシムのため、shutil.whichで解決した実パスを渡さないと
+    # shell=False の subprocess.run が `FileNotFoundError: [WinError 2]` で失敗する。
+    resolved = shutil.which(cmd[0])
+    if resolved is None:
+        raise FileNotFoundError(f"コマンドが見つかりません: {cmd[0]}")
     print(f"$ {' '.join(cmd)}  (cwd={cwd})")
-    subprocess.run(cmd, cwd=cwd, check=True)
+    subprocess.run([resolved, *cmd[1:]], cwd=cwd, check=True)
 
 
 def main() -> None:
