@@ -12,6 +12,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+if sys.platform == "win32":
+    # GitHub ActionsのWindowsランナーはコンソールの既定コードページがcp1252で、
+    # 日本語を含むprint()がUnicodeEncodeErrorで落ちるため、明示的にUTF-8にする。
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 KETCHER_VERSION = "v3.17.0"
 KETCHER_REPO = "https://github.com/epam/ketcher.git"
 
