@@ -3,10 +3,12 @@
 既存Excelマクロ「当量計算表」を再実装した、試薬の当量(eq)計算・個人試薬ライブラリ・
 化合物検索・分子構造描画を備えたPySide6製デスクトップアプリ。
 
-- リポジトリ: `D:\ユーザー\shuta\ドキュメント\MolWeigh`
-- 起動: `python main.py`
+- リポジトリ: `D:\ユーザー\shuta\ドキュメント\MolWeigh`(GitHub: https://github.com/STsuruga/MolWeigh、public)
+- 起動(開発時): `python main.py`
+- 配布: Win/Mac向けにPyInstallerでパッケージ済みexe/appをGitHub Releasesで配布(現行 [v0.1.0](https://github.com/STsuruga/MolWeigh/releases/tag/v0.1.0)、詳細は9章)
 - テスト: `tests/` 配下に294件(pytest)
 - 主要スタック: PySide6(GUI) / RDKit(化学計算・構造処理) / SQLite(DB) / Ketcher(2D構造式エディタ、Web埋め込み) / 自前実装のChemDraw風線画レンダラー(`core/lineart_render.py`、Qt非依存・SVG出力)
+- 引継ぎメモ: 新規チャットで作業を再開する場合はまず[`HANDOFF.md`](HANDOFF.md)を参照(「今どこにいて、次に何をすべきか」の要約)。この仕様書は技術詳細のリファレンス。
 
 ---
 
@@ -326,7 +328,51 @@ SQLite、`PRAGMA user_version`によるバージョン管理マイグレーシ�
 
 ---
 
-## 9. テスト方針
+## 9. パッケージング・配布
+
+Win/Mac双方をPyInstallerで単一アプリにパッケージし、GitHub Actions CIでビルド、GitHub Releasesで配布する。
+
+### 9.1 ビルド仕様(`molweigh.spec`、リポジトリ直下)
+
+- **同梱データ**: Ketcherの静的ビルド(`molweigh/ui/vendor/ketcher/`、事前に`scripts/build_ketcher.py`が必要)とRDKitの`Data`ディレクトリを`datas`に明示指定。`collect_data_files("rdkit")`でその他のRDKit同梱データも回収する。
+- **`hiddenimports`**: `PySide6.QtSvg` / `QtWebEngineCore` / `QtWebEngineWidgets` / `QtNetwork`(静的解析で自動検出されないため明示)。
+- **macOSのみ**: `sys.platform == "darwin"`のとき`BUNDLE()`で`MolWeigh.app`を生成(`bundle_identifier="com.molweigh.app"`、`CFBundleShortVersionString`はリリースごとにgitタグと一致させる、現行`"0.1.0"`)。
+- **spec特有の罠**: PyInstallerはspecファイルを`exec()`するため`__file__`が未定義。リポジトリルート解決にはPyInstallerが注入する`SPECPATH`変数を使う(`REPO_ROOT = os.path.abspath(SPECPATH)`)。
+- **証明書・WebEngineバイナリ**: `pyinstaller-hooks-contrib`のcertifiフック、PyInstaller本体のPySide6 WebEngineフックが自動適用されるため、`requests`のHTTPS通信・Ketcher/PubChemの`QWebEngineView`表示について手動設定は不要(実機検証済み、9.3節)。
+
+ローカルビルド手順: `python scripts/build_ketcher.py`(初回のみ)→ `pyinstaller --clean --noconfirm molweigh.spec` → `dist/MolWeigh/MolWeigh.exe`(Win)または`dist/MolWeigh.app`(Mac)。
+
+### 9.2 CI(`.github/workflows/build.yml`)
+
+- `windows-latest`/`macos-latest`のマトリックスビルド。トリガーは`workflow_dispatch`(手動実行)と`v*`タグのpush。
+- 手順: Python 3.11 + Node.js 20セットアップ → 依存インストール → `build_ketcher.py`でKetcherを毎回フレッシュビルド → コア系テスト(Qt非依存モジュールのみ)実行 → `pyinstaller`ビルド → **ランナー上でzip化してからアップロード**。
+- **アーティファクトはディレクトリではなく単一zipとしてアップロードする**(重要な設計判断、9.4節の教訓を参照): macOSは`ditto -c -k --sequesterRsrc --keepParent`、Windowsは`Compress-Archive`。
+- 物理Mac実機がないため、macOSビルドの検証はCIの`macos-latest`ランナーに一任している(ビルド成功は確認済みだが、実機起動確認はできていない)。
+
+### 9.3 リリース手順
+
+1. `molweigh.spec`の`CFBundleShortVersionString`をリリースするバージョンに合わせる。
+2. `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`(タグpushでもCIが自動起動する)。
+3. CI成功を確認後、`gh run download <run-id>`で両OS分のzipを取得。
+4. `gh release create vX.Y.Z <windows.zip> <macos.zip> --title "..." --notes "..."`。
+5. **タグ付け・Release作成は公開リポジトリへの可視アクションのため、実行前に必ずユーザーに確認すること。**
+
+**実機動作確認の記録(v0.1.0、Windows)**: パッケージ済みexeをソースツリー外のディレクトリから起動し、以下を確認済み(「exe化するとバックエンド機能が壊れていないか」という観点での検証):
+- Ketcher(`QWebEngineView`+ローカルHTTPサーバー)がツールバーごと正常にロードされ、インタラクティブに構造式を描画できる。
+- PubChemパネル(`QWebEngineView`+HTTPS)が実際のNIH/PubChemページをロードできる(`requests`/`certifi`のCA証明書バンドルが凍結ビルドでも正しく解決されている証拠)。
+- `db/paths.py`のAppDataパス解決が開発時と凍結ビルドで一致する(既存の開発時DBがそのまま読み込めた)。
+- QPainter直描きの3Dタブ(4.3節)が正常にレンダリングされ、「この向きを2Dに反映」も機能する。
+- macOS版は実機未検証(CIビルド成功のみ確認)。
+
+### 9.4 CI構築で踏んだ罠(いずれも修正済み、`scripts/build_ketcher.py`・`.github/workflows/build.yml`)
+
+1. **`subprocess.run(["npm", ...])`はWindowsで`shell=False`だと`FileNotFoundError: [WinError 2]`になる。** `npm`は`npm.cmd`というシムであり、Windowsの`CreateProcess`は拡張子なしの`"npm"`を直接実行できない。`shutil.which()`で解決した実パス(拡張子込み)を渡すよう修正。ローカル環境でこれに気づかなかったのは、Ketcherのベンダーディレクトリが本スクリプト以前に別の方法で構築されていて、このスクリプトのnpm呼び出し自体を一度も実行していなかったため。**Windows向けにサブプロセスでnpm/node系コマンドを呼ぶ処理を新たに書く場合は同じ罠に注意。**
+2. **GitHub ActionsのWindowsランナーはコンソールが既定でcp1252になっており、日本語を含む`print()`が`UnicodeEncodeError`で落ちる。** `sys.stdout.reconfigure(encoding="utf-8")`(Windowsのみ)で回避。
+3. **`actions/upload-artifact`はディレクトリをアップロードする際にシンボリックリンクを実体化(コピー)する。** macOSの`.app`バンドル内のQtフレームワークは`Versions/Current -> A`等のシンボリックリンクを多用しており、これが実体化されると本来200MB台のバンドルが3.7GBまで肥大化した(実際に発生し、初回ダウンロードが2分でタイムアウトしたことで発覚)。**ディレクトリごとアーティファクトとしてアップロードする設計は避け、必ずランナー上でアーカイブ化(symlinkを保持する方式で)してから単一ファイルをアップロードすること。**
+
+---
+
+## 10. テスト方針
 
 - `tests/`配下にファイル単位でpytestテストを配置(294件)。
 - Qt依存のテストはセッションスコープの`qapp`フィクスチャ(オフスクリーンプラットフォーム)を使用。
@@ -334,11 +380,12 @@ SQLite、`PRAGMA user_version`によるバージョン管理マイグレーシ�
 
 ---
 
-## 10. 既知の制約・未実装事項
+## 11. 既知の制約・未実装事項
 
+- **分子構造の描画品質について、ユーザーから「まだ不満がある」との発言があるが、具体的に何が不満かは未聴取(最優先で確認すべき事項)。** 線画の見た目(線の太さ・隠線ギャップの出方)や、`render_mode`(`auto`/`flat`/`solid`)を手動切り替えるUIが無いことが候補として考えられるが、憶測の域を出ない。新機能実装に入る前に、まずユーザーに直接確認すること。
 - ライブラリの部分一致検索で複数件ヒットした場合の候補選択UIは未実装(現状は完全一致優先、なければ最初の1件を自動採用)。
 - `TemplateEditDialog`の試薬追加は、ライブラリの先頭エントリ(使用回数順)を仮追加するだけの簡易実装で、専用の選択UIはない。
 - `StructureEditorDialog`(モーダル版のKetcherダイアログ)は実装済みだが現在どこからも呼び出されていない未使用クラス。
-- `LibraryEntry.render_mode`(`auto`/`flat`/`solid`)を手動で切り替えるUIは未実装。現状は常に`auto`判定に従う(4.2節)。ライブラリカードの「プレビューを更新」は既存の`render_mode`のまま焼き直すのみ。
+- `LibraryEntry.render_mode`(`auto`/`flat`/`solid`)を手動で切り替えるUIは未実装。現状は常に`auto`判定に従う(4.2節)。ライブラリカードの「プレビューを更新」は既存の`render_mode`のまま焼き直すのみ。上記の描画品質への不満の正体がこれなら着手候補。
 - ChemDraw CDXML(.cdxml/.cdx)との相互変換は未実装。pip版RDKit(2026.03.5で確認)には`Chem.HasChemDrawCDXSupport()`/`MolsFromCDXML`/`MolToCDXMLBlock`が同梱されており追加ライセンス不要で対応可能だが、本セッションでは着手していない。
-- macOS(Apple Silicon)向けパッケージングは実機確保後に着手予定(現状Windows優先)。
+- macOS版は実機未検証(9.3節)。CIビルド自体は成功しているが、実際にApple Silicon/Intel Mac上で起動・動作確認できていない。
