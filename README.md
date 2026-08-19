@@ -5,7 +5,7 @@
 ## 開発状況
 
 Phase 1〜6完了(計算コア・化学式パーサー・DB層・RDKit/PubChem連携・解決ロジック統合・PySide6 GUI)。
-残りはPhase 7/8(macOS/Windowsパッケージング)。テストは`tests/`配下に125件。
+残りはPhase 7/8(macOS/Windowsパッケージング)。テストは`tests/`配下に294件。
 
 ## 起動
 
@@ -37,21 +37,12 @@ python scripts/build_ketcher.py
 未配置の場合、「構造式を描く…」ボタンは警告を出すだけで、他の機能(化学式/SMILESの
 テキスト入力)には影響しない。
 
-### 3D構造プレビュー(3Dmol.js)の準備
+### 3D構造プレビュー
 
-「3Dプレビュー」ボタンは[3Dmol.js](https://3dmol.org/)(WebGLベースの3D分子ビューア)を
-`QWebEngineView`で埋め込んで使う。Ketcherと同様にリポジトリには同梱していないため、
-初回セットアップ時に以下を実行する(Node.js不要、ネット接続のみ必要)。
-
-```bash
-python scripts/fetch_3dmol.py
-```
-
-`molweigh/ui/vendor/3dmol/` に配置される(`.gitignore`済み)。未配置の場合、
-「3Dプレビュー」ボタンは警告を出すだけで、他の機能には影響しない。
-
-ダイアログ内の「この向きを2Dに反映」ボタンで、3Dビューア上でドラッグして
-回転させた今の向きを、Ketcherの2D構造式に書き戻すこともできる。
+構造入力パネルの「3D」タブは、`QPainter`で直接描画する自前実装のビューアで、
+外部ライブラリ・追加セットアップは不要(`QWebEngineView`を使わないため、
+Ketcher用のセットアップだけで動作する)。ドラッグして回転させた今の向きを、
+「この向きを2Dに反映」ボタンでKetcherの2D構造式に書き戻すこともできる。
 
 ## 動作環境
 
