@@ -27,25 +27,19 @@ class StructureInfo:
     formula: str
 
 
-@dataclass
-class Atom3D:
-    symbol: str
-    x: float
-    y: float
-    z: float
+def smiles_from_molblock(molblock: str) -> str:
+    """MOLブロックから立体化学つきのSMILESを得る。
 
-
-@dataclass
-class Bond3D:
-    begin: int
-    end: int
-    order: float
-
-
-@dataclass
-class Molecule3DData:
-    atoms: list[Atom3D]
-    bonds: list[Bond3D]
+    Ketcherの2D編集キャンバス上の楔形は、この経路(`MolFromMolBlock`が
+    ウェッジ結合から立体中心を自動判定する)を通すことで初めてSMILESへ
+    正しく反映される。3Dタブの配座生成はSMILES文字列を入力に取るため、
+    「3D化」する際はKetcherから`getSmiles()`ではなく`getMolfile()`で
+    取得したMOLブロックをこの関数に通してから渡す。
+    """
+    mol = Chem.MolFromMolBlock(molblock)
+    if mol is None:
+        raise ValueError("MOLブロックを解析できませんでした。")
+    return Chem.MolToSmiles(mol)
 
 
 def parse_smiles(smiles: str) -> StructureInfo:
@@ -65,9 +59,29 @@ def render_structure_image(smiles: str, size: tuple[int, int] = (300, 300)) -> Q
     平面レイアウトが破綻する構造(トリプチセンのような橋かけ環など)は
     `build_scene(mode="auto")`が自動的に3D配座を正射影した立体線画へ
     切り替える(奥行きを濃淡と隠線ギャップで表現する)。
+
+    ライブラリ由来の化合物で`LibraryEntry.preview_svg`が保存済みの場合は、
+    毎回ここで生成し直すのではなく`rasterize_svg(entry.preview_svg, size)`を
+    直接使うほうが望ましい(カードグリッドで多数を同時に描く際の負荷軽減)。
     """
     scene = lineart_render.build_scene(smiles, mode="auto")
     svg = lineart_render.render_svg(scene, params=lineart_render.RenderParams(width=size[0], height=size[1]))
+    return rasterize_svg(svg, size)
+
+
+def generate_preview_svg(smiles: str, render_mode: str = "auto") -> str:
+    """`LibraryEntry.preview_svg`に保存するためのSVG文字列を生成する。
+
+    `viewBox`付きのSVGとして保存するため、後から`rasterize_svg`で任意の
+    表示サイズ(テーブルヘッダ90×70・ライブラリカード110×85・登録
+    プレビュー168×128)に再ラスタライズできる。
+    """
+    scene = lineart_render.build_scene(smiles, mode=render_mode)
+    return lineart_render.render_svg(scene)
+
+
+def rasterize_svg(svg: str, size: tuple[int, int]) -> QPixmap:
+    """SVG文字列を指定サイズの`QPixmap`にラスタライズする。"""
     renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
     pixmap = QPixmap(*size)
     pixmap.fill(Qt.GlobalColor.white)
@@ -94,55 +108,37 @@ def realign_bridged_structure_molblock(smiles: str) -> str | None:
     return Chem.MolToMolBlock(projected)
 
 
-def generate_3d_view(smiles: str) -> tuple[str, Molecule3DData]:
-    """3Dプレビュー(`ui/molecule_3d_web_viewer.py`)向けに、3Dmol.js表示用の
-    MOLブロック(水素付き)と、「向きを2Dに反映」機能で使う重原子のみの
-    基準座標を、同一の正準向き・同一原点の座標系で一緒に生成する。
+def build_molblock_from_scene(scene: lineart_render.Scene, rotation: tuple[float, float, float, float] = (1, 0, 0, 0)) -> str:
+    """3Dタブ(`ui/molecule_3d_view.py`)で表示中の`Scene`に対し、ユーザーが
+    ドラッグで回転させた「今見ている向き」のXY座標で2Dレイアウトを持つ
+    MOLブロックを作る(「この向きを2Dに反映」用)。
 
-    3Dmol.jsが計測する回転(カメラのクォータニオン)は、3Dmol.jsに渡した
-    MOLブロックの座標系が基準になる。この基準座標系と「反映」用の原子
-    リストの座標系がズレていると、回転をそのまま適用しても正しい向きに
-    ならないため、必ずこの関数を通じて両方を一つの`orient_canonically`
-    呼び出しから一緒に作る。
+    `Scene`は原子・結合・(初期姿勢を含む)配座を自己完結で持っているため、
+    3D配座を再生成する必要はなく、`compute_geometry`と同じ回転行列を
+    座標へ直接適用して`RWMol`を組み立て直すだけでよい。
     """
-    mol_3d = structure_3d.embed_and_optimize(smiles)
-    orient_canonically(mol_3d)
-    molblock = Chem.MolToMolBlock(mol_3d)
+    R = lineart_render.quat_to_matrix(rotation) @ scene.initial_rotation
+    xyz = scene.coords @ R.T
 
-    mol_heavy = Chem.RemoveHs(mol_3d)
-    conformer = mol_heavy.GetConformer()
-    atoms = []
-    for atom in mol_heavy.GetAtoms():
-        pos = conformer.GetAtomPosition(atom.GetIdx())
-        atoms.append(Atom3D(symbol=atom.GetSymbol(), x=pos.x, y=pos.y, z=pos.z))
-    bonds = [
-        Bond3D(begin=b.GetBeginAtomIdx(), end=b.GetEndAtomIdx(), order=b.GetBondTypeAsDouble())
-        for b in mol_heavy.GetBonds()
-    ]
-    return molblock, Molecule3DData(atoms=atoms, bonds=bonds)
+    bond_type_map = {1: Chem.BondType.SINGLE, 2: Chem.BondType.DOUBLE, 3: Chem.BondType.TRIPLE}
+    mol = Chem.RWMol()
+    for symbol, charge in zip(scene.symbols, scene.formal_charges):
+        atom = Chem.Atom(symbol)
+        atom.SetFormalCharge(charge)
+        mol.AddAtom(atom)
+    for (begin, end), order in zip(scene.bonds, scene.orders):
+        mol.AddBond(int(begin), int(end), bond_type_map.get(int(order), Chem.BondType.SINGLE))
 
-
-def build_molblock_from_2d_layout(smiles: str, layout: list[tuple[float, float]]) -> str:
-    """3Dプレビュー(`ui/molecule_3d_web_viewer.py`)で表示中の分子に対し、
-    ユーザーが回転させた「今見ている向き」のXY座標(JS側で計算済み)を
-    そのまま2Dレイアウトとして持つMOLブロックを作る。
-
-    `generate_3d_view`と同じ経路(`embed_and_optimize` → `RemoveHs`、
-    `orient_canonically`は座標を上書きするため不要)でMolを組み立て直す。
-    埋め込みは固定シードで決定的なため、原子順序はビューアが表示していた
-    ものと一致する(`layout`の各要素と対応)。
-    """
-    mol_3d = structure_3d.embed_and_optimize(smiles)
-    mol = Chem.RemoveHs(mol_3d)
-    if mol.GetNumAtoms() != len(layout):
-        raise ValueError("原子数が一致しないため、2Dへの反映に失敗しました。")
     conformer = Chem.Conformer(mol.GetNumAtoms())
-    for i, (x, y) in enumerate(layout):
+    for i in range(mol.GetNumAtoms()):
+        x, y, _ = xyz[i]
         conformer.SetAtomPosition(i, Point3D(float(x), float(y), 0.0))
     conformer.Set3D(False)
-    mol.RemoveAllConformers()
     mol.AddConformer(conformer, assignId=True)
-    return Chem.MolToMolBlock(mol)
+
+    result = mol.GetMol()
+    Chem.SanitizeMol(result)
+    return Chem.MolToMolBlock(result)
 
 
 def _project_3d_to_2d(smiles: str) -> Chem.Mol:
@@ -172,8 +168,10 @@ def orient_canonically(mol: Chem.Mol) -> None:
     必ずしも一番綺麗に見えるとは限らない)ため、3通り全てを試し、2D投影
     した際の重原子間の最小距離が最大になる向きを採用する。
 
-    橋かけ構造の2D投影(`_project_3d_to_2d`)だけでなく、3Dプレビューの
-    「向きを2Dに反映」機能(`ui/molecule_3d_web_viewer.py`)の基準座標にも流用する。
+    `_project_3d_to_2d`(橋かけ構造の2D投影、`realign_bridged_structure_molblock`が使う)
+    専用の向き選択アルゴリズム。3Dタブの初期姿勢は別実装
+    (`lineart_render.canonical_rotation`、対称分子でのPCA縮退を避けるため
+    球面サンプリング方式に置き換え済み)を使う。
     """
     conformer = mol.GetConformer()
     coords = np.array([list(conformer.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())])

@@ -161,7 +161,8 @@ class Scene:
     coords: np.ndarray  # (n_atoms, 3) 重心を原点に移動済み・水素除去済み
     symbols: list[str]
     labels: list[str]  # 表示用ラベル(炭素は空文字)。例: O, OH, H2O
-    charges: list[str]  # 電荷の上付き文字。例: +, 2-
+    charges: list[str]  # 電荷の上付き文字(表示用)。例: +, 2-
+    formal_charges: list[int]  # 実際の形式電荷(RWMol再構築時にRDKitへ渡す用)
     wedges: np.ndarray  # (n_bonds,) 0=通常, +1=実楔(手前), -1=破線楔(奥)
     bonds: np.ndarray  # (n_bonds, 2) int
     orders: np.ndarray  # (n_bonds,) int 1/2/3 (芳香環はケクレ化済み)
@@ -234,6 +235,7 @@ def _scene_from_mol(mol: Chem.Mol, coords: np.ndarray, rotation: np.ndarray, wed
         symbols=[a.GetSymbol() for a in mol.GetAtoms()],
         labels=[_label(a) for a in mol.GetAtoms()],
         charges=[_charge(a) for a in mol.GetAtoms()],
+        formal_charges=[a.GetFormalCharge() for a in mol.GetAtoms()],
         wedges=wedges,
         bonds=bonds,
         orders=np.array(orders, dtype=int).reshape(-1),
@@ -276,7 +278,17 @@ def _arrange_fragments(frag_scenes: list[Scene], gap: float = 1.6) -> Scene:
     多い順に左から並べ直す。
     """
     frag_scenes = sorted(frag_scenes, key=lambda s: -len(s.coords))
-    coords, labels, charges, symbols, bonds, orders, centers, wedges = [], [], [], [], [], [], [], []
+    coords, labels, charges, formal_charges, symbols, bonds, orders, centers, wedges = (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
     x_cursor, offset = 0.0, 0
     for sc in frag_scenes:
         c = sc.coords @ sc.initial_rotation.T  # 各自の見やすい向きを焼き込む
@@ -287,6 +299,7 @@ def _arrange_fragments(frag_scenes: list[Scene], gap: float = 1.6) -> Scene:
         coords.append(c)
         labels += sc.labels
         charges += sc.charges
+        formal_charges += sc.formal_charges
         wedges.append(sc.wedges)
         symbols += sc.symbols
         bonds.append(sc.bonds + offset)
@@ -303,6 +316,7 @@ def _arrange_fragments(frag_scenes: list[Scene], gap: float = 1.6) -> Scene:
         symbols=symbols,
         labels=labels,
         charges=charges,
+        formal_charges=formal_charges,
         wedges=np.concatenate(wedges) if wedges else np.zeros(0, int),
         bonds=np.vstack(bonds) if bonds else np.zeros((0, 2), int),
         orders=np.concatenate(orders) if orders else np.zeros(0, int),
@@ -358,6 +372,7 @@ def build_scene(smiles: str, mode: str = "auto") -> Scene:
 
     labels = [_label(a) for a in mol.GetAtoms()]
     charges = [_charge(a) for a in mol.GetAtoms()]
+    formal_charges = [a.GetFormalCharge() for a in mol.GetAtoms()]
 
     ri = mol.GetRingInfo()
     rings = [np.array(r, dtype=int) for r in ri.AtomRings()]
@@ -385,6 +400,7 @@ def build_scene(smiles: str, mode: str = "auto") -> Scene:
         symbols=symbols,
         labels=labels,
         charges=charges,
+        formal_charges=formal_charges,
         wedges=np.zeros(len(bonds), dtype=int),
         bonds=bonds,
         orders=np.array(orders, dtype=int).reshape(-1),
@@ -488,9 +504,53 @@ def _segment_pieces(seg: Segment) -> list[tuple[float, float]]:
 # --------------------------------------------------------------------------
 # レンダリング本体
 # --------------------------------------------------------------------------
+#
+# `compute_geometry()`が幾何計算(投影・隠線ギャップ・深度キュー)を一度だけ
+# 行い、結果をQt非依存の描画片(線分・楔形・ラベル、色はRGB整数タプル)として
+# 返す。SVG出力(`render_svg`)とQPainter直描き(`ui/molecule_3d_view.py`)の
+# 両方がこれを共有することで、幾何ロジックの二重実装を避けている。
 
 
-def render_svg(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: RenderParams | None = None) -> str:
+@dataclass
+class LinePiece:
+    """1本の描画線分(色・太さ込み、深度でグラデーション分割済み)。"""
+
+    p0: np.ndarray
+    p1: np.ndarray
+    color: tuple[int, int, int]
+    width: float
+
+
+@dataclass
+class WedgePiece:
+    """1本の楔形結合。"""
+
+    p0: np.ndarray
+    p1: np.ndarray
+    normal: np.ndarray
+    kind: int  # +1 実楔(手前), -1 破線楔(奥)
+    color: tuple[int, int, int]
+
+
+@dataclass
+class LabelPiece:
+    """1個の原子ラベル。"""
+
+    pos: np.ndarray
+    text: str
+    charge: str
+    color: tuple[int, int, int]
+
+
+@dataclass
+class RenderGeometry:
+    lines: list[LinePiece]
+    wedges: list[WedgePiece]
+    labels: list[LabelPiece]
+    params: RenderParams
+
+
+def compute_geometry(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: RenderParams | None = None) -> RenderGeometry:
     p = params or RenderParams()
     R = quat_to_matrix(q) @ scene.initial_rotation
 
@@ -525,9 +585,9 @@ def render_svg(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: RenderPa
         raw = raw**p.depth_gamma  # 中間深度が一律に灰色化するのを防ぐ
         return max(1.0 - k * (1.0 - raw), p.min_t)  # 1=手前, 0=最奥
 
-    def color_at(t: float) -> str:
+    def color_at(t: float) -> tuple[int, int, int]:
         c = [int(round(f + (n - f) * t)) for n, f in zip(p.near_color, p.far_color)]
-        return "#%02x%02x%02x" % tuple(c)
+        return (c[0], c[1], c[2])
 
     def width_at(t: float) -> float:
         return p.width_far + (p.width_near - p.width_far) * t
@@ -612,7 +672,7 @@ def render_svg(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: RenderPa
             back.cuts.append((tb - half, tb + half))
 
     # --- 描画片へ展開して奥から順に並べる --------------------------------
-    pieces = []
+    raw_pieces = []
     for s in segments:
         d = s.p1 - s.p0
         for a0, b0 in _segment_pieces(s):
@@ -622,25 +682,68 @@ def render_svg(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: RenderPa
                 f1 = a0 + (b0 - a0) * (m + 1) / n_sub
                 zm = s.z0 + (s.z1 - s.z0) * (f0 + f1) / 2
                 tm = depth_t(zm)
-                pieces.append((zm, s.p0 + d * f0, s.p0 + d * f1, color_at(tm), width_at(tm)))
-    pieces.sort(key=lambda x: x[0])
+                raw_pieces.append((zm, s.p0 + d * f0, s.p0 + d * f1, color_at(tm), width_at(tm)))
+    raw_pieces.sort(key=lambda x: x[0])
+    lines = [LinePiece(p0=q0, p1=q1, color=col, width=w) for _, q0, q1, col, w in raw_pieces]
 
-    # --- SVG ------------------------------------------------------------
+    wedges = [
+        WedgePiece(p0=q0, p1=q1, normal=nv, kind=kind, color=color_at(t))
+        for q0, q1, nv, kind, t in wedge_shapes
+    ]
+
+    labels = [
+        LabelPiece(
+            pos=sxy[i],
+            text=sym,
+            charge=scene.charges[i],
+            color=color_at(max(depth_t(float(z[i])), p.label_min_t)),
+        )
+        for i, sym in enumerate(scene.labels)
+        if sym
+    ]
+
+    return RenderGeometry(lines=lines, wedges=wedges, labels=labels, params=p)
+
+
+def _tspans(text: str, charge: str, fs: float) -> str:
+    """H2O の 2 を下付き、電荷を上付きにする。dy は累積なので都度戻す(SVG専用)。"""
+    out, dy = [], 0.0
+    for run in re.findall(r"\d+|\D+", text):
+        if run.isdigit():
+            shift = fs * 0.22 - dy
+            out.append(f'<tspan font-size="{fs*0.72:.1f}" dy="{shift:.1f}">{run}</tspan>')
+            dy = fs * 0.22
+        else:
+            out.append(f'<tspan dy="{-dy:.1f}">{run}</tspan>' if dy else run)
+            dy = 0.0
+    if charge:
+        shift = -fs * 0.38 - dy
+        out.append(f'<tspan font-size="{fs*0.72:.1f}" dy="{shift:.1f}">{charge}</tspan>')
+    return "".join(out)
+
+
+def render_svg(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: RenderParams | None = None) -> str:
+    """`compute_geometry()`の結果をSVG文字列化する。"""
+    geom = compute_geometry(scene, q, params)
+    p = geom.params
+
     out = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {p.width} {p.height}" '
         f'width="{p.width}" height="{p.height}">',
         f'<rect width="{p.width}" height="{p.height}" fill="#ffffff"/>',
     ]
     out.append('<g stroke-linecap="round" stroke-linejoin="round">')
-    for _, q0, q1, col, w in pieces:
+    for line in geom.lines:
+        col = "#%02x%02x%02x" % line.color
         out.append(
-            f'<line x1="{q0[0]:.2f}" y1="{q0[1]:.2f}" x2="{q1[0]:.2f}" y2="{q1[1]:.2f}" '
-            f'stroke="{col}" stroke-width="{w:.2f}"/>'
+            f'<line x1="{line.p0[0]:.2f}" y1="{line.p0[1]:.2f}" x2="{line.p1[0]:.2f}" y2="{line.p1[1]:.2f}" '
+            f'stroke="{col}" stroke-width="{line.width:.2f}"/>'
         )
-    for q0, q1, nv, kind, t in wedge_shapes:
+    for wedge in geom.wedges:
         half = p.wedge_width / 2
-        col = color_at(t)
-        if kind > 0:  # 実楔: 手前に出る三角形
+        col = "#%02x%02x%02x" % wedge.color
+        q0, q1, nv = wedge.p0, wedge.p1, wedge.normal
+        if wedge.kind > 0:  # 実楔: 手前に出る三角形
             a, b = q1 + nv * half, q1 - nv * half
             out.append(
                 f'<path d="M{q0[0]:.2f},{q0[1]:.2f} L{a[0]:.2f},{a[1]:.2f} '
@@ -660,30 +763,14 @@ def render_svg(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: RenderPa
                 )
     out.append("</g>")
 
-    def _tspans(text: str, charge: str, fs: float) -> str:
-        """H2O の 2 を下付き、電荷を上付きにする。dy は累積なので都度戻す。"""
-        out, dy = [], 0.0
-        for run in re.findall(r"\d+|\D+", text):
-            if run.isdigit():
-                shift = fs * 0.22 - dy
-                out.append(f'<tspan font-size="{fs*0.72:.1f}" dy="{shift:.1f}">{run}</tspan>')
-                dy = fs * 0.22
-            else:
-                out.append(f'<tspan dy="{-dy:.1f}">{run}</tspan>' if dy else run)
-                dy = 0.0
-        if charge:
-            shift = -fs * 0.38 - dy
-            out.append(f'<tspan font-size="{fs*0.72:.1f}" dy="{shift:.1f}">{charge}</tspan>')
-        return "".join(out)
-
-    for i, sym in enumerate(scene.labels):
-        if not sym:
-            continue
-        t = max(depth_t(float(z[i])), p.label_min_t)
+    for label in geom.labels:
+        col = "#%02x%02x%02x" % label.color
         out.append(
-            f'<text x="{sxy[i][0]:.2f}" y="{sxy[i][1]:.2f}" fill="{color_at(t)}" '
+            f'<text x="{label.pos[0]:.2f}" y="{label.pos[1]:.2f}" fill="{col}" '
             f'font-family="Helvetica,Arial,sans-serif" font-size="{p.font_size}" '
-            f'text-anchor="middle" dominant-baseline="central">' + _tspans(sym, scene.charges[i], p.font_size) + "</text>"
+            f'text-anchor="middle" dominant-baseline="central">'
+            + _tspans(label.text, label.charge, p.font_size)
+            + "</text>"
         )
     out.append("</svg>")
     return "\n".join(out)
@@ -692,8 +779,13 @@ def render_svg(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: RenderPa
 __all__ = [
     "Scene",
     "RenderParams",
+    "RenderGeometry",
+    "LinePiece",
+    "WedgePiece",
+    "LabelPiece",
     "build_scene",
     "build_flat_scene",
+    "compute_geometry",
     "render_svg",
     "quat_to_matrix",
     "canonical_rotation",

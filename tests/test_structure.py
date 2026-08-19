@@ -2,15 +2,17 @@ import numpy as np
 import pytest
 from rdkit import Chem
 
-from molweigh.core import structure_3d
+from molweigh.core import lineart_render, structure_3d
 from molweigh.core.structure import (
     _min_pairwise_distance_2d,
-    build_molblock_from_2d_layout,
-    generate_3d_view,
+    build_molblock_from_scene,
+    generate_preview_svg,
     orient_canonically,
     parse_smiles,
+    rasterize_svg,
     realign_bridged_structure_molblock,
     render_structure_image,
+    smiles_from_molblock,
 )
 
 
@@ -28,6 +30,27 @@ class TestParseSmiles:
     def test_invalid_smiles_raises(self):
         with pytest.raises(ValueError):
             parse_smiles("not-a-smiles(((")
+
+
+class TestSmilesFromMolblock:
+    def test_preserves_wedge_based_stereochemistry(self):
+        from rdkit.Chem import AllChem
+
+        mol = Chem.MolFromSmiles("C[C@H](N)C(=O)O")  # L-アラニン
+        AllChem.Compute2DCoords(mol)
+        Chem.WedgeMolBonds(mol, mol.GetConformer())
+        molblock = Chem.MolToMolBlock(mol)
+
+        result = smiles_from_molblock(molblock)
+
+        assert "@" in result
+        assert Chem.MolToSmiles(Chem.MolFromSmiles(result)) == Chem.MolToSmiles(
+            Chem.MolFromSmiles("C[C@H](N)C(=O)O")
+        )
+
+    def test_invalid_molblock_raises(self):
+        with pytest.raises(ValueError):
+            smiles_from_molblock("not a molblock")
 
 
 class TestRenderStructureImage:
@@ -54,6 +77,32 @@ class TestRenderStructureImage:
         assert not pixmap.isNull()
 
 
+class TestGeneratePreviewSvg:
+    def test_returns_svg_string(self, qapp):
+        svg = generate_preview_svg("CCO")
+        assert svg.startswith("<svg")
+        assert svg.rstrip().endswith("</svg>")
+
+    def test_invalid_smiles_raises(self, qapp):
+        with pytest.raises(ValueError):
+            generate_preview_svg("not-a-smiles(((")
+
+    def test_render_mode_forces_solid(self, qapp):
+        # ベンゼンは平面判定になるはずだが、mode="solid"を明示すれば立体化する。
+        flat_svg = generate_preview_svg("c1ccccc1", render_mode="flat")
+        solid_svg = generate_preview_svg("c1ccccc1", render_mode="solid")
+        assert flat_svg != solid_svg
+
+
+class TestRasterizeSvg:
+    def test_rasterizes_to_requested_size(self, qapp):
+        svg = generate_preview_svg("CCO")
+        pixmap = rasterize_svg(svg, (90, 70))
+        assert not pixmap.isNull()
+        assert pixmap.width() == 90
+        assert pixmap.height() == 70
+
+
 class TestRealignBridgedStructureMolblock:
     def test_non_bridged_returns_none(self, qapp):
         assert realign_bridged_structure_molblock("CCO") is None
@@ -75,75 +124,44 @@ class TestRealignBridgedStructureMolblock:
             realign_bridged_structure_molblock("not-a-smiles(((")
 
 
-class TestGenerate3DView:
-    def test_ethanol_has_no_explicit_hydrogens_in_view_data(self):
-        molblock, view_data = generate_3d_view("CCO")
-        assert len(view_data.atoms) == 3  # C, C, O only (Hs removed)
-        assert {a.symbol for a in view_data.atoms} == {"C", "O"}
+class TestBuildMolblockFromScene:
+    def test_identity_rotation_matches_scene_xy(self):
+        scene = lineart_render.build_scene("CCO", mode="auto")
+        molblock = build_molblock_from_scene(scene)
 
-    def test_molblock_has_explicit_hydrogens(self):
-        molblock, view_data = generate_3d_view("CCO")
-        mol = Chem.MolFromMolBlock(molblock, removeHs=False)
+        assert "V2000" in molblock
+        mol = Chem.MolFromMolBlock(molblock)
         assert mol is not None
-        assert mol.GetNumAtoms() > len(view_data.atoms)  # Hs included in molblock
-
-    def test_bond_count_and_orders(self):
-        molblock, view_data = generate_3d_view("C=O")
-        assert len(view_data.bonds) == 1
-        assert view_data.bonds[0].order == pytest.approx(2.0)
-
-    def test_bridged_structure_succeeds(self):
-        triptycene = "c1ccc2c(c1)C1c3ccccc3C2c2ccccc21"
-        molblock, view_data = generate_3d_view(triptycene)
-        assert len(view_data.atoms) == Chem.MolFromSmiles(triptycene).GetNumAtoms()
-        assert len(view_data.bonds) > 0
-
-    def test_invalid_smiles_raises(self):
-        with pytest.raises(ValueError):
-            generate_3d_view("not-a-smiles(((")
-
-    def test_molblock_and_view_data_share_coordinate_frame(self):
-        # generate_3d_view()のmolblock(水素付き)とview_data(重原子のみ)は、
-        # 3Dmol.js側のクォータニオンをview_dataへそのまま適用できるよう、
-        # 同一の正準向き・原点を共有していなければならない。
-        molblock, view_data = generate_3d_view("CCO")
-        mol = Chem.MolFromMolBlock(molblock, removeHs=False)
-        heavy_atoms = [a for a in mol.GetAtoms() if a.GetSymbol() != "H"]
+        assert mol.GetNumAtoms() == len(scene.coords)
         conformer = mol.GetConformer()
-        # MOLブロックは座標を小数点以下4桁に丸めて保存するため、往復後は
-        # そのオーダーの誤差が生じる(許容誤差はそれを見込んだもの)。
-        for heavy_atom, view_atom in zip(heavy_atoms, view_data.atoms):
-            pos = conformer.GetAtomPosition(heavy_atom.GetIdx())
-            assert pos.x == pytest.approx(view_atom.x, abs=1e-3)
-            assert pos.y == pytest.approx(view_atom.y, abs=1e-3)
-            assert pos.z == pytest.approx(view_atom.z, abs=1e-3)
-
-
-class TestBuildMolblockFrom2DLayout:
-    def test_uses_given_xy_as_2d_layout(self):
-        molblock, view_data = generate_3d_view("CCO")
-        layout = [(0.0, 0.0), (1.5, 0.0), (2.2, 1.2)]
-
-        result_molblock = build_molblock_from_2d_layout("CCO", layout)
-
-        assert "V2000" in result_molblock
-        mol = Chem.MolFromMolBlock(result_molblock)
-        assert mol is not None
-        assert mol.GetNumAtoms() == len(view_data.atoms)
-        conformer = mol.GetConformer()
-        for i, (x, y) in enumerate(layout):
+        rotated = scene.coords @ scene.initial_rotation.T
+        for i in range(len(scene.coords)):
             pos = conformer.GetAtomPosition(i)
-            assert pos.x == pytest.approx(x)
-            assert pos.y == pytest.approx(y)
+            # MOLブロックは座標を小数点以下4桁に丸めて保存する。
+            assert pos.x == pytest.approx(rotated[i, 0], abs=1e-3)
+            assert pos.y == pytest.approx(rotated[i, 1], abs=1e-3)
             assert pos.z == pytest.approx(0.0)
 
-    def test_mismatched_layout_length_raises(self):
-        with pytest.raises(ValueError):
-            build_molblock_from_2d_layout("CCO", [(0.0, 0.0)])
+    def test_bond_orders_preserved(self):
+        scene = lineart_render.build_scene("C=O", mode="flat")
+        molblock = build_molblock_from_scene(scene)
+        mol = Chem.MolFromMolBlock(molblock)
+        assert mol is not None
+        bond = mol.GetBondWithIdx(0)
+        assert bond.GetBondTypeAsDouble() == pytest.approx(2.0)
 
-    def test_invalid_smiles_raises(self):
-        with pytest.raises(ValueError):
-            build_molblock_from_2d_layout("not-a-smiles(((", [])
+    def test_formal_charge_preserved(self):
+        scene = lineart_render.build_scene("CC(=O)[O-].[Na+]", mode="auto")
+        molblock = build_molblock_from_scene(scene)
+        mol = Chem.MolFromMolBlock(molblock)
+        assert mol is not None
+        assert Chem.rdMolDescriptors.CalcMolFormula(mol) == "C2H3NaO2"
+
+    def test_rotation_changes_output_coordinates(self):
+        scene = lineart_render.build_scene("c1ccc2c(c1)C1c3ccccc3C2c2ccccc21", mode="solid")
+        identity_block = build_molblock_from_scene(scene, rotation=(1, 0, 0, 0))
+        rotated_block = build_molblock_from_scene(scene, rotation=(0.9, 0.3, 0.2, 0.1))
+        assert identity_block != rotated_block
 
 
 class TestOrientCanonically:
