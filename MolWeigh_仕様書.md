@@ -5,8 +5,8 @@
 
 - リポジトリ: `D:\ユーザー\shuta\ドキュメント\MolWeigh`(GitHub: https://github.com/STsuruga/MolWeigh、public)
 - 起動(開発時): `python main.py`
-- 配布: Win/Mac向けにPyInstallerでパッケージ済みexe/appをGitHub Releasesで配布(現行 [v0.1.0](https://github.com/STsuruga/MolWeigh/releases/tag/v0.1.0)、詳細は9章)
-- テスト: `tests/` 配下に335件(pytest)
+- 配布: Win/Mac向けにPyInstallerでパッケージ済みexe/appをGitHub Releasesで配布(現行 [v0.2.0](https://github.com/STsuruga/MolWeigh/releases/tag/v0.2.0)、詳細は9章)
+- テスト: `tests/` 配下に323件(pytest)
 - 主要スタック: PySide6(GUI) / RDKit(化学計算・構造処理) / SQLite(DB) / Ketcher(2D構造式エディタ、Web埋め込み) / 自前実装のChemDraw風線画レンダラー(`core/lineart_render.py`、Qt非依存・SVG出力)
 - 引継ぎメモ: 新規チャットで作業を再開する場合はまず[`HANDOFF.md`](HANDOFF.md)を参照(「今どこにいて、次に何をすべきか」の要約)。この仕様書は技術詳細のリファレンス。
 
@@ -65,7 +65,7 @@ scripts/
 │ 当量計算テーブル             │ 構造入力パネル(幅1)                  │
 │ (ReagentTableWidget)       │ (StructureInputPanel)               │
 │                            │  Ketcher編集画面 + 分子量/化学式表示  │
-│ [テンプレートに追加]         │  + 4つの操作ボタン                   │
+│ [テンプレートに追加]         │  + 2つの操作ボタン                   │
 │ [テンプレート管理]           │                                     │
 │         [テーブルをリセット] ├─────────────────┬───────────────────┤
 │                            │ 化合物ライブラリ   │ PubChem検索       │
@@ -137,7 +137,7 @@ scripts/
 - **`KetcherView(QWidget)`**が中核の再利用可能部品。`StructureInputPanel`(メイン画面常設)と`ReagentEditorDialog`(化合物登録ダイアログ)の両方から使う。
 - **非同期取得パターン**: `QWebEngineView.page().runJavaScript()`のコールバックはJSのPromiseを直接awaitできない制約があるため、`window.ketcher.getSmiles()`/`getMolfile()`の結果を`window.__molweighResult`というグローバル変数に書き込ませ、Python側は150ms間隔・最大40回(=6秒)のポーリングで読み取る(`get_smiles(callback)` / `get_molblock(callback)`)。
   - **既知のバグと修正**: 取得結果に`.strip()`を適用すると、MOLブロックの1行目(分子名、多くの場合空行)が失われて以降の全行がズレ、RDKitがパースに失敗する(`Cannot convert '...' to unsigned int on line 4`)。SMILESと違いMOLブロックは行位置が構造的な意味を持つため、末尾のみを削る`.rstrip()`に変更して修正した。
-- **`set_smiles(text)`**は`window.ketcher.setMolecule(text)`を呼ぶ。名前に反して、渡す文字列はSMILESに限らず**MOLブロック文字列でもよい**(Ketcher側が自動判定する)。「橋かけ構造を整列」「この向きを2Dに反映」機能はこの性質を使ってKetcherのキャンバスへ書き戻す。
+- **`set_smiles(text)`**は`window.ketcher.setMolecule(text)`を呼ぶ。名前に反して、渡す文字列はSMILESに限らず**MOLブロック文字列でもよい**(Ketcher側が自動判定する)。「この向きを2Dに反映」機能はこの性質を使ってKetcherのキャンバスへ書き戻す。
 - `shutdown()`でローカルHTTPサーバーを停止する(ウィンドウを閉じる際に必ず呼び出す必要がある)。
 
 ### 4.2 (B) ChemDraw風線画レンダラー(`core/lineart_render.py`) ★最重要
@@ -232,16 +232,17 @@ Ketcherには標準で「3D Viewer」ボタン(Miewエンジンによる表示)�
 
 ### 4.6 構造入力パネルのタブとボタン(`ui/structure_input_panel.py`)
 
-メイン画面に常設される`StructureInputPanel`は、`QTabWidget`(左、「2D編集」=`KetcherView`/「3D」=`Structure3DTab`)と情報表示+3ボタンのサイドバー(右、幅150px固定)で構成される。`ReagentEditorDialog`にもほぼ同じ構成(「構造式を反映」という名称のみ異なるボタンが1つ追加)が実装されている。
+メイン画面に常設される`StructureInputPanel`は、`QTabWidget`(左、「2D編集」=`KetcherView`/「3D」=`Structure3DTab`)と情報表示+2ボタンのサイドバー(右、幅150px固定)で構成される。`ReagentEditorDialog`にもほぼ同じ構成(「構造式を反映」という名称のみ異なるボタンが1つ追加)が実装されている。
 
 | ボタン/操作 | 処理 | 説明 |
 |---|---|---|
 | **分子量を計算** | `get_smiles` → `compound_source.resolve_from_smiles` | 化学式・分子量ラベルを更新するのみ。計算テーブルには反映しない。「試薬に追加」を押す前でも確認できるようにするための機能。 |
 | **「3D」タブに切替** | `get_molblock` → `smiles_from_molblock` → `SceneBuilder.build` | RDKitで見やすさ優先に選んだ3D配座を、QPainter直描きの`Molecule3DView`で表示。既定では2D構造に影響しないが、「この向きを2Dに反映」を押した場合のみ回転させた角度をKetcherの2D構造式に書き戻す(4.4節)。 |
-| **橋かけ構造を整列** | `get_smiles` → `structure.realign_bridged_structure_molblock` → (橋かけなら)`ketcher.set_smiles(molblock)` | 現在Ketcherに描かれている構造が橋かけ構造(bridgehead原子あり)であれば、3D投影で見やすい向きに再配置したMOLブロックを**Ketcherのキャンバスへ書き戻す**。橋かけ構造でない場合は「整列は不要です」と案内するのみ。手描きで乱雑になった橋かけ構造をワンクリックで整理できる、Ketcher自身の自動レイアウトを外部から差し替えられないという制約への対処(4.2節の`auto`判定とは別軸の機能として存置)。 |
-| **試薬に追加** | `get_smiles` → `resolve_from_smiles` → `added_to_table.emit(info)` | 化学式・分子量ラベルを更新し、`CompoundInfo`を計算テーブルへ渡す(`MainWindow`が最初の空き列に挿入、なければ新規列を追加)。 |
+| **試薬に追加** | `get_molblock` → `smiles_from_molblock` → `resolve_from_smiles(smiles, molblock=molblock)` → `added_to_table.emit(info)` | 化学式・分子量ラベルを更新し、`molblock`つきの`CompoundInfo`を計算テーブルへ渡す(`MainWindow`が最初の空き列に挿入、なければ新規列を追加)。2026-08-22改訂: `molblock`を持ち回るため`get_smiles`ではなく`get_molblock`から始める経路に変更(4.2節「molblock引数によるKetcher座標の直接利用」参照)。 |
 
 いずれの操作も、Ketcherが未初期化(`KetcherNotBundledError`)・構造式が空・SMILES解析失敗・3D埋め込み失敗などのエラーは、パネル内の固定サイズエラーラベル(2D関連)または3Dタブ内のステータス表示(3D関連)に表示される。
+
+**「橋かけ構造を整列」ボタンは撤去済み(2026-08-22)**: molblock一次表現化(Stage 1)とsolidモードのKabsch向き一致(Stage 2)により、Ketcherの2D自動レイアウトが乱れた橋かけ構造でも3Dタブ側で描いた向きに近い姿勢を自動的に選べるようになったため、手動での整列操作は不要と判断し削除した(`core/structure.py::realign_bridged_structure_molblock`も削除)。
 
 ### 4.7 構造式画像のレンダリング入口とプレビュー保存
 
@@ -382,7 +383,8 @@ Win/Mac双方をPyInstallerで単一アプリにパッケージし、GitHub Acti
 
 - **同梱データ**: Ketcherの静的ビルド(`molweigh/ui/vendor/ketcher/`、事前に`scripts/build_ketcher.py`が必要)とRDKitの`Data`ディレクトリを`datas`に明示指定。`collect_data_files("rdkit")`でその他のRDKit同梱データも回収する。
 - **`hiddenimports`**: `PySide6.QtSvg` / `QtWebEngineCore` / `QtWebEngineWidgets` / `QtNetwork`(静的解析で自動検出されないため明示)。
-- **macOSのみ**: `sys.platform == "darwin"`のとき`BUNDLE()`で`MolWeigh.app`を生成(`bundle_identifier="com.molweigh.app"`、`CFBundleShortVersionString`はリリースごとにgitタグと一致させる、現行`"0.1.0"`)。
+- **macOSのみ**: `sys.platform == "darwin"`のとき`BUNDLE()`で`MolWeigh.app`を生成(`bundle_identifier="com.molweigh.app"`、`CFBundleShortVersionString`はリリースごとにgitタグと一致させる、現行`"0.2.0"`)。
+- **アプリアイコン(2026-08-22追加)**: `molweigh/resources/app_icon.ico`をリポジトリに同梱。Windowsは`EXE(icon=...)`にこの`.ico`を直接渡す(ローカルビルドで実機確認済み、エクスプローラー・タスクバーとも新アイコン表示)。macOSの`BUNDLE(icon=...)`は`.icns`必須で`.ico`は使えないため、`scripts/build_macos_icon.py`(要`iconutil`、macOS専用)でCIのmacOSランナー上でのみ`.icns`を生成する。ローカルWindows環境では`.icns`が存在しないため、`molweigh.spec`は`os.path.isfile()`チェックで`icon=None`にフォールバックする。
 - **spec特有の罠**: PyInstallerはspecファイルを`exec()`するため`__file__`が未定義。リポジトリルート解決にはPyInstallerが注入する`SPECPATH`変数を使う(`REPO_ROOT = os.path.abspath(SPECPATH)`)。
 - **証明書・WebEngineバイナリ**: `pyinstaller-hooks-contrib`のcertifiフック、PyInstaller本体のPySide6 WebEngineフックが自動適用されるため、`requests`のHTTPS通信・Ketcher/PubChemの`QWebEngineView`表示について手動設定は不要(実機検証済み、9.3節)。
 
@@ -410,6 +412,8 @@ Win/Mac双方をPyInstallerで単一アプリにパッケージし、GitHub Acti
 - QPainter直描きの3Dタブ(4.3節)が正常にレンダリングされ、「この向きを2Dに反映」も機能する。
 - macOS版は実機未検証(CIビルド成功のみ確認)。
 
+**実機動作確認の記録(v0.2.0、Windows)**: 同様にソースツリー外から起動し確認済み。新アイコンが反映されていること(エクスプローラー・タスクバー)、メインウィンドウ・当量計算テーブル・ライブラリカード(aspirin/DMAP)・PubChemパネルが正常表示、3Dタブに今回追加した「向きを整える/形を整える/配座を選び直す/クリーンアップを取り消す」ボタンが正しくレンダリングされ初期状態(構造未読み込み)で無効化されていることをスクリーンショットで確認。macOS版は引き続き実機未検証(CIビルド成功のみ確認)。
+
 ### 9.4 CI構築で踏んだ罠(いずれも修正済み、`scripts/build_ketcher.py`・`.github/workflows/build.yml`)
 
 1. **`subprocess.run(["npm", ...])`はWindowsで`shell=False`だと`FileNotFoundError: [WinError 2]`になる。** `npm`は`npm.cmd`というシムであり、Windowsの`CreateProcess`は拡張子なしの`"npm"`を直接実行できない。`shutil.which()`で解決した実パス(拡張子込み)を渡すよう修正。ローカル環境でこれに気づかなかったのは、Ketcherのベンダーディレクトリが本スクリプト以前に別の方法で構築されていて、このスクリプトのnpm呼び出し自体を一度も実行していなかったため。**Windows向けにサブプロセスでnpm/node系コマンドを呼ぶ処理を新たに書く場合は同じ罠に注意。**
@@ -420,7 +424,7 @@ Win/Mac双方をPyInstallerで単一アプリにパッケージし、GitHub Acti
 
 ## 10. テスト方針
 
-- `tests/`配下にファイル単位でpytestテストを配置(335件)。
+- `tests/`配下にファイル単位でpytestテストを配置(323件)。
 - Qt依存のテストはセッションスコープの`qapp`フィクスチャ(オフスクリーンプラットフォーム)を使用。
 - **既知の環境依存事項**: `QWebEngineView`を伴うテスト(Ketcher・PubChem埋め込みブラウザ関連)を大量に同一プロセスで実行すると、蓄積したリソースが原因でPySide6がまれにネイティブクラッシュすることがある(exit code 127でサマリー行が出ない、または`Windows fatal exception`のスタックトレースが出て`threading.Thread.start()`自体が失敗する、など症状は複数パターンある)。これはテスト対象コードの不具合ではなく環境依存の既知の問題。`StructureInputPanel`/`ReagentEditorDialog`が3Dタブ(`Structure3DTab`)を持つようになったことで1テストあたりのオブジェクト数が増え、`test_structure_input_panel.py`・`test_reagent_editor_dialog.py`はファイル単位どころかクラス単位でもまれに閾値を超えてクラッシュすることがある(逆に3Dタブ自体は`QWebEngineView`を使わないので、単体では負荷を増やさない)。疑わしい場合はクラス単位、それでも再現するならテスト単位までチャンクを細かくして「個々のテストロジックは全て正しいか」を切り分けること(2026-08時点で両ファイルとも個別実行では全件パス確認済み)。exit codeだけでなく「N passed」のサマリー行の有無で成否を判定すること。
 
