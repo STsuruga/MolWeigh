@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field, replace
-from typing import Sequence
+from typing import Literal, Sequence
 
 import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDepictor
+from rdkit.Geometry import Point3D
 
 # --------------------------------------------------------------------------
 # 3D配座生成(見やすさ優先。core/structure_3d.pyとは別経路)
@@ -63,6 +64,7 @@ def embed_and_optimize(smiles: str, n_confs: int = 24, sanity_window: float = 40
 
     ps = AllChem.ETKDGv3()
     ps.randomSeed = ETKDG_SEED  # 再現性
+    ps.numThreads = 0  # 0 = システムが対応する最大コア数を使う
     cids = list(AllChem.EmbedMultipleConfs(mol, numConfs=n_confs, params=ps))
     if not cids:
         ps.useRandomCoords = True
@@ -71,9 +73,9 @@ def embed_and_optimize(smiles: str, n_confs: int = 24, sanity_window: float = 40
         raise ValueError("3D埋め込みに失敗")
 
     if AllChem.MMFFHasAllMoleculeParams(mol):
-        res = AllChem.MMFFOptimizeMoleculeConfs(mol, maxIters=2000)
+        res = AllChem.MMFFOptimizeMoleculeConfs(mol, numThreads=0, maxIters=2000)
     else:
-        res = AllChem.UFFOptimizeMoleculeConfs(mol, maxIters=2000)
+        res = AllChem.UFFOptimizeMoleculeConfs(mol, numThreads=0, maxIters=2000)
     energies = [e for _, e in res]
     emin = min(energies)
     ok = [c for c, e in zip(cids, energies) if e - emin <= sanity_window] or cids
@@ -152,6 +154,62 @@ def canonical_rotation(coords: np.ndarray, bonds: np.ndarray, n_dir: int = 160) 
 
 
 # --------------------------------------------------------------------------
+# 初期姿勢の決定(Kabsch法によるKetcher描画向きとの一致、Stage 2)
+# --------------------------------------------------------------------------
+
+_DRAWING_MATCH_LAMBDA = 0.4  # 見やすさ(clarity)と描いた向きとの一致度のバランス
+
+
+def _kabsch_rotation(X: np.ndarray, Y: np.ndarray) -> np.ndarray:
+    """X(3D配座)をY(2D+z=0)に最も近づける回転行列を返す。
+
+    XとYは同じ原子順序で対応が取れており、両方とも重心が原点に移動済みで
+    あること。鏡像解(det=-1)を除外し、立体化学の反転を防ぐ。
+    """
+    H = X.T @ Y
+    U, S, Vt = np.linalg.svd(H)
+    d = np.sign(np.linalg.det(Vt.T @ U.T)) or 1.0
+    D = np.diag([1.0, 1.0, d])
+    return Vt.T @ D @ U.T
+
+
+def _rotation_matching_drawing(coords: np.ndarray, drawn_xy: np.ndarray, n_dir: int = 160) -> tuple[np.ndarray, float]:
+    """「描いた向きに近く、かつ見やすい」3D姿勢の回転行列とスコアを返す。
+
+    `coords`(3D配座)と`drawn_xy`(molblockの2D座標)は同じ原子順序で対応が
+    取れていること。
+
+    当初はKabsch法で得た回転を初期値に±20°の局所探索で補正する設計だった
+    (改善提案書の案)が、実測でトリプチセンのような橋かけ構造では機能しない
+    ことが判明した: molblockの2D座標自体がCoordGenによる破綻したレイアウト
+    (auto判定で立体化に切り替わった原因そのもの)であることが多く、Kabsch解が
+    最初から悪い向きになり、狭い局所探索ではそこから抜け出せず
+    `canonical_rotation`の全方位探索より明らかに読みにくい結果になった。
+    そのため`canonical_rotation`と同じFibonacci格子160方向の全探索に、
+    「描いた向きとの近さ」のペナルティ項を加える方式に変更した(Kabsch解も
+    候補の1つとして含める)。計算量はKabsch局所探索案より増えるが、
+    `canonical_rotation`と同等(実測で誤差の範囲)。
+    `canonical_rotation`と違い`_in_plane_align`は適用しない(適用すると
+    描いた向きとの一致がずれてしまうため)。
+    """
+    c = coords - coords.mean(axis=0)
+    y = drawn_xy - drawn_xy.mean(axis=0)
+    y3 = np.zeros((len(y), 3))
+    y3[:, :2] = y
+
+    candidates = [_kabsch_rotation(c, y3)] + [_basis_from_view(d) for d in _fibonacci_directions(n_dir)]
+    best_score, best_R = -np.inf, candidates[0]
+    for R in candidates:
+        xy = (c @ R.T)[:, :2]
+        clarity_score = _min_pairwise_distance_2d(xy)
+        rmsd = float(np.sqrt(((xy - y) ** 2).sum(axis=1).mean()))
+        score = clarity_score - _DRAWING_MATCH_LAMBDA * rmsd
+        if score > best_score:
+            best_score, best_R = score, R
+    return best_R, best_score
+
+
+# --------------------------------------------------------------------------
 # シーン(レンダリング用の前計算済みデータ)
 # --------------------------------------------------------------------------
 
@@ -198,14 +256,19 @@ FLAT_MAX_CROSSINGS = 0  # 結合が1本でも交差したら破綻
 
 
 def _scene_from_mol(mol: Chem.Mol, coords: np.ndarray, rotation: np.ndarray, wedges: np.ndarray) -> Scene:
-    lone = mol.GetNumAtoms() == 1
+    # 「単原子フラグメント(対イオン・結晶水)か」はmol全体ではなく連結成分ごとに
+    # 判定する。molblock由来のシーンは塩・水和物を分割せず1つのmolとして渡す
+    # ことがあるため(通常のSMILES経路は事前にフラグメント分割済みで常に単一
+    # 連結成分だが、その場合でもこの判定は従来と同じ結果になる)。
+    lone_atoms = {idx for group in Chem.GetMolFrags(mol) if len(group) == 1 for idx in group}
 
     def _label(a: Chem.Atom) -> str:
         n = a.GetTotalNumHs()
-        if a.GetSymbol() == "C" and a.GetFormalCharge() == 0 and not lone:
+        is_lone = a.GetIdx() in lone_atoms
+        if a.GetSymbol() == "C" and a.GetFormalCharge() == 0 and not is_lone:
             return ""
         h = "" if n == 0 else "H" if n == 1 else f"H{n}"
-        return (h + a.GetSymbol()) if lone else (a.GetSymbol() + h)
+        return (h + a.GetSymbol()) if is_lone else (a.GetSymbol() + h)
 
     def _charge(a: Chem.Atom) -> str:
         c = a.GetFormalCharge()
@@ -245,6 +308,11 @@ def _scene_from_mol(mol: Chem.Mol, coords: np.ndarray, rotation: np.ndarray, wed
     )
 
 
+def _wedge_array(mol: Chem.Mol) -> np.ndarray:
+    wedge_map = {Chem.BondDir.BEGINWEDGE: 1, Chem.BondDir.BEGINDASH: -1}
+    return np.array([wedge_map.get(b.GetBondDir(), 0) for b in mol.GetBonds()], dtype=int).reshape(-1)
+
+
 def build_flat_scene(smiles: str) -> tuple[Scene, float, int]:
     """従来型の平面構造式。RDKitの2Dレイアウト + 楔形。
 
@@ -262,10 +330,35 @@ def build_flat_scene(smiles: str) -> tuple[Scene, float, int]:
     coords[:, 2] = 0.0
     coords -= coords.mean(axis=0)
 
-    wedge_map = {Chem.BondDir.BEGINWEDGE: 1, Chem.BondDir.BEGINDASH: -1}
-    wedges = np.array([wedge_map.get(b.GetBondDir(), 0) for b in mol.GetBonds()], dtype=int).reshape(-1)
+    scene = _scene_from_mol(mol, coords, np.eye(3), _wedge_array(mol))
+    dmin, cross = _layout_quality(coords[:, :2], scene.bonds)
+    return scene, dmin, cross
 
-    scene = _scene_from_mol(mol, coords, np.eye(3), wedges)
+
+def build_flat_scene_from_molblock(molblock: str) -> tuple[Scene, float, int] | None:
+    """Ketcherの2Dレイアウト(molblock)をそのまま使う平面構造式。
+
+    ユーザーが整えた向き・配置(塩や水和物を離して描いた場合の位置関係も含む)を
+    そのまま座標として使い、CoordGenでの再レイアウトをスキップする。フラグメントを
+    分割・再配置しないため(`_scene_from_mol`は連結成分をまたいでも動作する)、
+    Ketcher上で重ねて描かれていた場合はそのまま重なった`dmin`/`cross`が返る。
+    呼び出し側の`auto`判定がこれを検知すれば、自然に既存のSMILES経由の自動配置
+    (`_arrange_fragments`)にフォールバックする。
+
+    解析に失敗した場合はNoneを返し、呼び出し側にSMILES経由の通常経路を使わせる。
+    """
+    mol = Chem.MolFromMolBlock(molblock)
+    if mol is None or mol.GetNumConformers() == 0:
+        return None
+    mol = Chem.RemoveHs(mol)
+    Chem.Kekulize(mol, clearAromaticFlags=True)
+    Chem.WedgeMolBonds(mol, mol.GetConformer())
+
+    coords = np.array(mol.GetConformer().GetPositions())
+    coords[:, 2] = 0.0
+    coords -= coords.mean(axis=0)
+
+    scene = _scene_from_mol(mol, coords, np.eye(3), _wedge_array(mol))
     dmin, cross = _layout_quality(coords[:, :2], scene.bonds)
     return scene, dmin, cross
 
@@ -326,7 +419,7 @@ def _arrange_fragments(frag_scenes: list[Scene], gap: float = 1.6) -> Scene:
     )
 
 
-def build_scene(smiles: str, mode: str = "auto") -> Scene:
+def build_scene(smiles: str, mode: str = "auto", molblock: str | None = None) -> Scene:
     """構造シーンを組み立てる。
 
     mode="flat"  従来型の平面構造式(楔形つき)
@@ -334,7 +427,26 @@ def build_scene(smiles: str, mode: str = "auto") -> Scene:
     mode="auto"  まず平面で描き、レイアウトが破綻していれば立体に切り替える
                  (シクロヘキサンやステロイドは非平面だが平面で描けるので平面のまま、
                   トリプチセンやアダマンタンのように環が重なるものだけ立体になる)
+
+    `molblock`(Ketcherの2Dキャンバスから取得した座標つきのMOLブロック)を渡すと、
+    flat/auto判定時にCoordGenでの再レイアウトをスキップし、ユーザーが整えた
+    向き・配置をそのまま使う(SMILES経由では2D座標が失われ、描画のたびに
+    向きが再生成されてしまう問題への対処)。molblockの解析に失敗した場合や
+    立体化が必要と判定された場合は、通常のSMILES経由の経路にフォールバックする。
+    `molblock`は座標(見た目)専用で、化合物の同一性判定には常にSMILESを使う。
+
+    立体化が必要になった場合(橋かけ構造など2D座標をそのまま使えない分子)も、
+    molblockがあれば「描いた向きに近い3D姿勢」をKabsch法で選ぶ
+    (`_build_solid_scene_matching_drawing`、Stage 2)。失敗時は
+    `canonical_rotation`による見やすさ最優先の従来経路にフォールバックする。
     """
+    if molblock is not None and mode in ("flat", "auto"):
+        from_molblock = build_flat_scene_from_molblock(molblock)
+        if from_molblock is not None:
+            flat, dmin, cross = from_molblock
+            if mode == "flat" or (dmin >= FLAT_DMIN_MIN and cross <= FLAT_MAX_CROSSINGS):
+                return flat
+
     parts = smiles.split(".")
     if len(parts) > 1:  # 塩・水和物・共結晶
         return _arrange_fragments([build_scene(p, mode) for p in parts if p])
@@ -344,69 +456,279 @@ def build_scene(smiles: str, mode: str = "auto") -> Scene:
         if mode == "flat" or (dmin >= FLAT_DMIN_MIN and cross <= FLAT_MAX_CROSSINGS):
             return flat
 
+    if molblock is not None:
+        matched = _build_solid_scene_matching_drawing(molblock)
+        if matched is not None:
+            return matched
+
     mol3d, coarse_R = embed_and_optimize(smiles)
     mol = Chem.RemoveHs(mol3d)
     Chem.Kekulize(mol, clearAromaticFlags=True)
+    return _scene_from_mol3d(mol)
 
+
+# --------------------------------------------------------------------------
+# シーンキャッシュ(Stage 3): render_structure_image/generate_preview_svg/3D
+# タブがそれぞれ個別にbuild_sceneを呼んでいた構造をやめ、計算を1回に集約する。
+# --------------------------------------------------------------------------
+
+# レンダラーの出力(見た目)が変わるような修正をするたびにインクリメントする。
+# `LibraryEntry.renderer_version`と比較し、食い違えば保存済みpreview_svgを
+# 自動で焼き直す(`ui/library_dialog.py`)。
+CURRENT_RENDERER_VERSION = 1
+
+_scene_cache: dict[tuple[str | None, str, str], Scene] = {}
+
+
+def get_or_build_scene(smiles: str, mode: str = "auto", molblock: str | None = None) -> Scene:
+    """`build_scene`の結果をインメモリでキャッシュする。
+
+    `Scene`は生成後に書き換えられない設計(回転は非破壊、姿勢は別パラメータ
+    として都度適用する)なので、複数の呼び出し元で同じインスタンスを安全に
+    共有できる。キーに`molblock`を含めるため、Ketcherで構造を描き直せば
+    (=molblockが変われば)別エントリとして扱われ、古い座標を誤って使い回す
+    ことはない。
+    """
+    key = (molblock, smiles, mode)
+    cached = _scene_cache.get(key)
+    if cached is not None:
+        return cached
+    scene = build_scene(smiles, mode=mode, molblock=molblock)
+    _scene_cache[key] = scene
+    return scene
+
+
+def clear_scene_cache() -> None:
+    """インメモリのシーンキャッシュを全て破棄する(主にテスト用)。"""
+    _scene_cache.clear()
+
+
+def _scene_from_mol3d(mol: Chem.Mol, rotation: np.ndarray | None = None) -> Scene:
+    """3D配座つきのMol(水素除去・Kekulize済み)からSceneを組み立てる。
+
+    立体モード(`build_scene`)と3Dクリーンアップ機能(`cleanup_geometry`)の
+    両方が使う共有経路。`rotation`省略時は`canonical_rotation`で初期姿勢を
+    毎回再探索する(力場最適化やクリーンアップで形が変わるたびに見やすい
+    向きも変わるため)。`rotation`を渡すとそれをそのまま採用する
+    (`_build_solid_scene_matching_drawing`がKabsch法で得た回転を使う場合)。
+    """
     conf = mol.GetConformer()
     coords = np.array(conf.GetPositions(), dtype=float)
     coords -= coords.mean(axis=0)
-    symbols = [a.GetSymbol() for a in mol.GetAtoms()]
+    bonds = np.array([(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in mol.GetBonds()], dtype=int).reshape(-1, 2)
+    wedges = np.zeros(len(bonds), dtype=int)
+    if rotation is None:
+        rotation = canonical_rotation(coords, bonds)
+    return _scene_from_mol(mol, coords, rotation, wedges)
 
-    lone = mol.GetNumAtoms() == 1  # 単原子フラグメント(対イオン・結晶水)
 
-    def _label(a: Chem.Atom) -> str:
-        n = a.GetTotalNumHs()
-        if a.GetSymbol() == "C" and n >= 0 and a.GetFormalCharge() == 0 and not lone:
-            return ""
-        h = "" if n == 0 else "H" if n == 1 else f"H{n}"
-        # H2O / HCl / NH3 のように、単独で存在する分子は水素を先に書く慣習
-        return (h + a.GetSymbol()) if lone else (a.GetSymbol() + h)
+def _build_solid_scene_matching_drawing(molblock: str, n_confs: int = 24, sanity_window: float = 40.0) -> Scene | None:
+    """molblockの2D座標に最も近い3D姿勢を選んでSceneを組み立てる(Stage 2)。
 
-    def _charge(a: Chem.Atom) -> str:
-        c = a.GetFormalCharge()
-        if c == 0:
-            return ""
-        sign = "+" if c > 0 else "−"
-        return sign if abs(c) == 1 else f"{abs(c)}{sign}"
+    `embed_and_optimize`と違い、SMILESから独立に再パースしない
+    (再パースすると原子の並び順が変わり、molblockの2D座標とKabsch法で
+    対応が取れなくなるため)。`Chem.RemoveHs` → `Chem.AddHs`は既存原子の
+    順序を変えない(新しい水素は末尾に追加される)ことを利用し、molblock
+    由来の重原子2D座標と、これから生成する3D配座の重原子を同じ添字で
+    対応づける。
 
-    labels = [_label(a) for a in mol.GetAtoms()]
-    charges = [_charge(a) for a in mol.GetAtoms()]
-    formal_charges = [a.GetFormalCharge() for a in mol.GetAtoms()]
+    採用する配座・回転は、既存の見やすさ指標(`_min_pairwise_distance_2d`)と
+    「描いた向きとの近さ」を両立するスコア(`_rotation_matching_drawing`)で
+    選ぶ。molblockの解析に失敗した場合はNoneを返し、呼び出し側にSMILES経由の
+    通常経路(`embed_and_optimize`)を使わせる。一方、3D埋め込み自体が失敗する
+    場合はValueErrorを送出する(molblock経由かSMILES経由かに依らず同じ分子・
+    立体配置で同じ結果になるため、Noneを返してフォールバックさせても
+    embed_and_optimizeが同じ失敗を繰り返すだけで数秒の二度手間になる)。
+    """
+    mol = Chem.MolFromMolBlock(molblock)
+    if mol is None or mol.GetNumConformers() == 0:
+        return None
+    mol = Chem.RemoveHs(mol)
+    if mol.GetNumAtoms() < 3:
+        return None
+    heavy_xy = np.array(mol.GetConformer().GetPositions())[:, :2]
+    mol = Chem.AddHs(mol)
 
-    ri = mol.GetRingInfo()
-    rings = [np.array(r, dtype=int) for r in ri.AtomRings()]
+    ps = AllChem.ETKDGv3()
+    ps.randomSeed = ETKDG_SEED
+    ps.numThreads = 0
+    cids = list(AllChem.EmbedMultipleConfs(mol, numConfs=n_confs, params=ps))
+    if not cids:
+        ps.useRandomCoords = True
+        cids = list(AllChem.EmbedMultipleConfs(mol, numConfs=n_confs, params=ps))
+    if not cids:
+        # 埋め込みそのものが失敗するのは分子の結合・立体配置に起因し、molblock
+        # 経由かSMILES経由かに依らず同じ結果になる(実測で確認済み)。ここで
+        # Noneを返すとbuild_scene()がSMILES経由のembed_and_optimizeへ
+        # フォールバックし、同じ失敗を待ってから同じ例外を出すだけで二度手間に
+        # なる(埋め込み失敗は数秒かかる)。ここで直接例外を出して打ち切る。
+        raise ValueError("3D埋め込みに失敗")
 
-    bonds, orders, centers = [], [], []
-    for b in mol.GetBonds():
-        i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-        bonds.append((i, j))
-        orders.append(int(round(b.GetBondTypeAsDouble())))
-        c = np.full(3, np.nan)
-        for r in rings:  # この結合を含む最小の環の重心
-            if i in r and j in r:
-                cand = coords[r].mean(axis=0)
-                if np.isnan(c).all():
-                    c = cand
-        centers.append(c)
+    if AllChem.MMFFHasAllMoleculeParams(mol):
+        res = AllChem.MMFFOptimizeMoleculeConfs(mol, numThreads=0, maxIters=2000)
+    else:
+        res = AllChem.UFFOptimizeMoleculeConfs(mol, numThreads=0, maxIters=2000)
+    energies = [e for _, e in res]
+    emin = min(energies)
+    ok = [c for c, e in zip(cids, energies) if e - emin <= sanity_window] or cids
 
-    bonds = np.array(bonds, dtype=int).reshape(-1, 2)  # 単原子イオンは0本
-    lengths = (
-        np.linalg.norm(coords[bonds[:, 0]] - coords[bonds[:, 1]], axis=1) if len(bonds) else np.array([1.5])
-    )
+    heavy = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() > 1]
+    best_score, best_R, best_cid = -np.inf, np.eye(3), ok[0]
+    for cid in ok:
+        coords3d = np.array(mol.GetConformer(cid).GetPositions())[heavy]
+        R, score = _rotation_matching_drawing(coords3d, heavy_xy)
+        if score > best_score:
+            best_score, best_R, best_cid = score, R, cid
 
-    return Scene(
-        coords=coords,
-        symbols=symbols,
-        labels=labels,
-        charges=charges,
-        formal_charges=formal_charges,
-        wedges=np.zeros(len(bonds), dtype=int),
-        bonds=bonds,
-        orders=np.array(orders, dtype=int).reshape(-1),
-        ring_center=np.array(centers, dtype=float).reshape(-1, 3),
-        initial_rotation=canonical_rotation(coords, bonds),  # 全原子で細かく再探索
-        bond_length=float(np.median(lengths)),
+    keep = Chem.Mol(mol)
+    keep.RemoveAllConformers()
+    conf = Chem.Conformer(mol.GetConformer(best_cid))
+    conf.SetId(0)
+    keep.AddConformer(conf, assignId=True)
+
+    final_mol = Chem.RemoveHs(keep)
+    Chem.Kekulize(final_mol, clearAromaticFlags=True)
+    return _scene_from_mol3d(final_mol, rotation=best_R)
+
+
+# --------------------------------------------------------------------------
+# 3Dクリーンアップ機能(3Dタブの「向きを整える/形を整える/配座を選び直す」)
+# --------------------------------------------------------------------------
+
+
+def recompute_initial_rotation(scene: Scene) -> Scene:
+    """現在の配座はそのまま、初期姿勢(見やすい向き)だけを再計算する。
+
+    3Dタブの「向きを整える」機能(改善提案書の機能C)。ほぼ無コストなので、
+    形を整える・配座を選び直す前に気軽に試せる。
+    """
+    return replace(scene, initial_rotation=canonical_rotation(scene.coords, scene.bonds))
+
+
+def scene_to_mol(scene: Scene, rotation: Sequence[float] = (1, 0, 0, 0), flatten: bool = False) -> Chem.Mol:
+    """Sceneから(水素を持たない)Molを再構築する。
+
+    `flatten=True`は「この向きを2Dに反映」用(z=0の2D配座)、`flatten=False`は
+    3Dクリーンアップ機能用(実際のZ座標を保持する3D配座)。`flatten=False`の
+    場合のみ、3D座標から立体化学を再判定する(`AssignStereochemistryFrom3D`)。
+    `Scene`はもともと化学的な同一性情報(原子・結合・形式電荷)を自己完結で
+    持っているため、3D配座を再生成せずに直接組み立て直せる。
+    """
+    R = quat_to_matrix(rotation) @ scene.initial_rotation
+    xyz = scene.coords @ R.T
+
+    bond_type_map = {1: Chem.BondType.SINGLE, 2: Chem.BondType.DOUBLE, 3: Chem.BondType.TRIPLE}
+    mol = Chem.RWMol()
+    for symbol, charge in zip(scene.symbols, scene.formal_charges):
+        atom = Chem.Atom(symbol)
+        atom.SetFormalCharge(charge)
+        mol.AddAtom(atom)
+    for (begin, end), order in zip(scene.bonds, scene.orders):
+        mol.AddBond(int(begin), int(end), bond_type_map.get(int(order), Chem.BondType.SINGLE))
+
+    conformer = Chem.Conformer(mol.GetNumAtoms())
+    for i in range(mol.GetNumAtoms()):
+        x, y, z = xyz[i]
+        conformer.SetAtomPosition(i, Point3D(float(x), float(y), 0.0 if flatten else float(z)))
+    conformer.Set3D(not flatten)
+    mol.AddConformer(conformer, assignId=True)
+
+    result = mol.GetMol()
+    Chem.SanitizeMol(result)
+    if not flatten:
+        Chem.AssignStereochemistryFrom3D(result)
+    return result
+
+
+def _get_forcefield(mol: Chem.Mol):
+    if AllChem.MMFFHasAllMoleculeParams(mol):
+        props = AllChem.MMFFGetMoleculeProperties(mol)
+        return AllChem.MMFFGetMoleculeForceField(mol, props)
+    return AllChem.UFFGetMoleculeForceField(mol)  # MMFFがパラメータを持たない原子種のフォールバック
+
+
+def _compute_energy(mol: Chem.Mol) -> float:
+    ff = _get_forcefield(mol)
+    return float(ff.CalcEnergy()) if ff is not None else 0.0
+
+
+def _restore_and_relax_hydrogens(mol: Chem.Mol) -> Chem.Mol:
+    """水素なしの3D Molに近似座標つきの水素を復元し、重原子を固定して水素だけを緩和する。
+
+    `Chem.AddHs(mol, addCoords=True)`が与える水素座標はあくまで近似値で、
+    そのまま力場最適化にかけると孤立電子対の空間を埋める水素が見つからず
+    sp3中心の角度が破綻することがあるため、本番の最適化前にこの一手間を挟む。
+    """
+    mol_h = Chem.AddHs(mol, addCoords=True)
+    ff = _get_forcefield(mol_h)
+    if ff is not None:
+        for i in range(mol.GetNumAtoms()):  # 重原子を固定し、追加した水素だけ動かす
+            ff.AddFixedPoint(i)
+        ff.Minimize(maxIts=200)
+    return mol_h
+
+
+def _stereo_smiles(mol_with_h: Chem.Mol) -> str:
+    """3D座標から立体化学を再判定し、比較用の正準SMILESを返す(元のmolは変更しない)。"""
+    mol_copy = Chem.Mol(mol_with_h)
+    Chem.AssignStereochemistryFrom3D(mol_copy)
+    return Chem.MolToSmiles(Chem.RemoveHs(mol_copy))
+
+
+@dataclass
+class CleanupResult:
+    scene: Scene
+    energy_delta: float  # kcal/mol(MMFF)相当。after - before(負なら安定化)
+    stereo_changed: bool  # 最適化前後で立体表記(CIP)が変化したか。真ならUIで警告
+
+
+def cleanup_geometry(scene: Scene, mode: Literal["optimize", "reembed"] = "optimize") -> CleanupResult:
+    """3Dタブの「クリーンアップ」機能。
+
+    mode="optimize": 現配座をMMFF94(フォールバックUFF)で最小化する(機能A、
+        歪んだ結合長・結合角を正す。ChemDrawのClean Up相当)。
+    mode="reembed": 配座を生成し直し(`build_scene`と同じ経路)、見やすさで
+        再選択する(機能B、折れ曲がった鎖状分子を伸ばす等、より重い処理)。
+
+    塩・水和物(複数フラグメント)は、reembedの場合はSMILESで分割して
+    フラグメントごとに生成し直し、既存の`_arrange_fragments`で再配置する
+    (`embed_and_optimize`に複数フラグメントのSMILESを直接渡すと、既存の
+    `build_scene`の設計上の前提=事前分割済み、から外れて重なる恐れがある
+    ため)。optimizeの場合は現在の相対配置を尊重し、分割しない。
+
+    Sceneは水素を保持していないため、`Chem.AddHs(addCoords=True)`で近似
+    座標を復元してから最適化にかける(水素なしでの最適化は破綻するため)。
+    `scene.initial_rotation`は書き換えない(呼び出し側がカメラ維持のため
+    別途上書きする前提)。
+    """
+    heavy_mol = scene_to_mol(scene)
+    mol_h_before = _restore_and_relax_hydrogens(heavy_mol)
+    before_smiles = _stereo_smiles(mol_h_before)
+    energy_before = _compute_energy(mol_h_before)
+
+    if mode == "reembed":
+        smiles = Chem.MolToSmiles(heavy_mol)
+        parts = [p for p in smiles.split(".") if p]
+        if len(parts) > 1:
+            new_scene = _arrange_fragments([build_scene(p, "solid") for p in parts])
+        else:
+            new_scene = build_scene(smiles, "solid")
+    else:
+        ff = _get_forcefield(mol_h_before)
+        if ff is not None:
+            ff.Minimize(maxIts=2000)
+        mol_final = Chem.RemoveHs(mol_h_before)
+        Chem.Kekulize(mol_final, clearAromaticFlags=True)
+        new_scene = _scene_from_mol3d(mol_final)
+
+    mol_h_after = _restore_and_relax_hydrogens(scene_to_mol(new_scene))
+    after_smiles = _stereo_smiles(mol_h_after)
+    energy_after = _compute_energy(mol_h_after)
+
+    return CleanupResult(
+        scene=new_scene,
+        energy_delta=energy_after - energy_before,
+        stereo_changed=before_smiles != after_smiles,
     )
 
 
@@ -565,14 +887,24 @@ def compute_geometry(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: Re
             xy *= (f / (f - (z - z.mean())))[:, None]
 
     # --- スケール決定(ラベル分の余白も見込む) -------------------------
-    span = xy.max(axis=0) - xy.min(axis=0)
-    span = np.maximum(span, 1e-6)
+    # 分子全体の3D直径(全原子ペア間の最大距離、回転に依存しない)を基準にする。
+    # 現在の投影後バウンディングボックスでスケールを決めると、インタラクティブに
+    # 回転させたときに見かけの輪郭の大きさが伸縮し「回転中にズームしているよう
+    # に見える」ため(ユーザー報告により判明、2026-08-22)。直径基準なら分子の
+    # 見かけの大きさは向きによらず一定になる。
+    diff = scene.coords[:, None, :] - scene.coords[None, :, :]
+    diameter = float(np.max(np.linalg.norm(diff, axis=2)))
+    diameter = max(diameter, 1e-6)
     avail = np.array([p.width, p.height]) * (1 - 2 * p.padding)
-    scale = float(min(avail / span))
+    scale = float(min(avail)) / diameter
     proj_bond = np.median(np.linalg.norm(xy[scene.bonds[:, 0]] - xy[scene.bonds[:, 1]], axis=1))
     if proj_bond * scale > p.max_bond_px:  # 小分子の過拡大を抑制
         scale = p.max_bond_px / proj_bond
-    center = (xy.max(axis=0) + xy.min(axis=0)) / 2
+    # 画面中心 = 分子の重心(scene.coordsは重心が原点になるよう構築済みのため、
+    # 回転してもxy.mean(axis=0)は常に(0,0)近傍を保つ)。旧実装は投影後バウンディング
+    # ボックスの中心を使っており、非対称な分子では回転につれてこの中心が分子本体
+    # に対して揺れ動き、「回転の重心が分子の重心からズレる」ように見えていた。
+    center = xy.mean(axis=0)
     sxy = (xy - center) * np.array([scale, -scale]) + np.array([p.width / 2, p.height / 2])
 
     # --- 深度の正規化 ---------------------------------------------------
@@ -582,7 +914,8 @@ def compute_geometry(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: Re
 
     def depth_t(zv: float) -> float:
         raw = (zv - zmin) / zspan if zspan > 1e-9 else 1.0
-        raw = raw**p.depth_gamma  # 中間深度が一律に灰色化するのを防ぐ
+        raw = min(max(raw, 0.0), 1.0)  # 端点以外の補間点は浮動小数点誤差でわずかに[0,1]を外れうる。
+        raw = raw**p.depth_gamma  # 中間深度が一律に灰色化するのを防ぐ(負数に分数乗すると複素数になるため上でクランプ)
         return max(1.0 - k * (1.0 - raw), p.min_t)  # 1=手前, 0=最奥
 
     def color_at(t: float) -> tuple[int, int, int]:
@@ -785,10 +1118,18 @@ __all__ = [
     "LabelPiece",
     "build_scene",
     "build_flat_scene",
+    "build_flat_scene_from_molblock",
     "compute_geometry",
     "render_svg",
     "quat_to_matrix",
     "canonical_rotation",
     "embed_and_optimize",
+    "recompute_initial_rotation",
+    "scene_to_mol",
+    "cleanup_geometry",
+    "CleanupResult",
+    "get_or_build_scene",
+    "clear_scene_cache",
+    "CURRENT_RENDERER_VERSION",
     "replace",
 ]

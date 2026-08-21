@@ -7,7 +7,6 @@ from molweigh.core.structure import (
     generate_preview_svg,
     parse_smiles,
     rasterize_svg,
-    realign_bridged_structure_molblock,
     render_structure_image,
     smiles_from_molblock,
 )
@@ -98,47 +97,6 @@ class TestRasterizeSvg:
         assert not pixmap.isNull()
         assert pixmap.width() == 90
         assert pixmap.height() == 70
-
-
-class TestRealignBridgedStructureMolblock:
-    def test_non_bridged_returns_none(self, qapp):
-        assert realign_bridged_structure_molblock("CCO") is None
-
-    def test_bridged_returns_molblock_with_matching_atom_count(self, qapp):
-        triptycene = "c1ccc2c(c1)C1c3ccccc3C2c2ccccc21"
-        molblock = realign_bridged_structure_molblock(triptycene)
-        assert molblock is not None
-        assert "V2000" in molblock
-
-        from rdkit import Chem
-
-        reloaded = Chem.MolFromMolBlock(molblock)
-        assert reloaded is not None
-        assert reloaded.GetNumAtoms() == Chem.MolFromSmiles(triptycene).GetNumAtoms()
-
-    def test_invalid_smiles_raises(self, qapp):
-        with pytest.raises(ValueError):
-            realign_bridged_structure_molblock("not-a-smiles(((")
-
-    def test_orientation_matches_preview_rendering(self, qapp):
-        # realign_bridged_structure_molblock()(Ketcherへ書き戻す向き)と
-        # generate_preview_svg()/render_structure_image()(カード等の
-        # プレビュー)が別々の向き選択アルゴリズムを使っていると、同じ分子
-        # でも見た目の向きが食い違う(実際にユーザーから報告された不具合)。
-        # 両者ともlineart_render.build_scene(mode="solid")の同一の
-        # canonical_rotationを通る経路に統一したため、原子順序・座標が
-        # (MOLブロックの4桁丸め誤差を除いて)完全に一致するはず。
-        triptycene = "c1ccc2c(c1)C1c3ccccc3C2c2ccccc21"
-        molblock = realign_bridged_structure_molblock(triptycene)
-        scene = lineart_render.build_scene(triptycene, mode="solid")
-        expected_xy = (scene.coords @ scene.initial_rotation.T)[:, :2]
-
-        mol = Chem.MolFromMolBlock(molblock)
-        conformer = mol.GetConformer()
-        for i in range(mol.GetNumAtoms()):
-            pos = conformer.GetAtomPosition(i)
-            assert pos.x == pytest.approx(expected_xy[i, 0], abs=1e-3)
-            assert pos.y == pytest.approx(expected_xy[i, 1], abs=1e-3)
 
 
 class TestBuildMolblockFromScene:

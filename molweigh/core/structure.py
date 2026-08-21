@@ -9,12 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from rdkit import Chem
 from rdkit.Chem import Descriptors, rdMolDescriptors
-from rdkit.Geometry import Point3D
 
 from . import lineart_render
 
@@ -51,7 +50,12 @@ def parse_smiles(smiles: str) -> StructureInfo:
     )
 
 
-def render_structure_image(smiles: str, size: tuple[int, int] = (300, 300)) -> QPixmap:
+def render_structure_image(
+    smiles: str,
+    size: tuple[int, int] = (300, 300),
+    device_pixel_ratio: float = 1.0,
+    molblock: str | None = None,
+) -> QPixmap:
     """SMILES文字列から2D構造式画像を生成し、`QPixmap` として返す。
 
     ChemDraw風の自前線画レンダラー(`core/lineart_render.py`)で描画する。
@@ -62,56 +66,51 @@ def render_structure_image(smiles: str, size: tuple[int, int] = (300, 300)) -> Q
     ライブラリ由来の化合物で`LibraryEntry.preview_svg`が保存済みの場合は、
     毎回ここで生成し直すのではなく`rasterize_svg(entry.preview_svg, size)`を
     直接使うほうが望ましい(カードグリッドで多数を同時に描く際の負荷軽減)。
+
+    `device_pixel_ratio`は表示先ウィジェットの`devicePixelRatioF()`を渡すと
+    HiDPI画面でのにじみを防げる(既定1.0=従来通り)。
+
+    `molblock`(Ketcherの2D座標つきMOLブロック)を渡すと、ユーザーが整えた
+    向きをそのまま使い、CoordGenでの再レイアウトをスキップする。
+
+    `Scene`の組み立ては`get_or_build_scene`のインメモリキャッシュを経由する
+    (同じ構造を何度も描く際の計算集約、Stage 3)。
     """
-    scene = lineart_render.build_scene(smiles, mode="auto")
+    scene = lineart_render.get_or_build_scene(smiles, mode="auto", molblock=molblock)
     svg = lineart_render.render_svg(scene, params=lineart_render.RenderParams(width=size[0], height=size[1]))
-    return rasterize_svg(svg, size)
+    return rasterize_svg(svg, size, device_pixel_ratio)
 
 
-def generate_preview_svg(smiles: str, render_mode: str = "auto") -> str:
+def generate_preview_svg(smiles: str, render_mode: str = "auto", molblock: str | None = None) -> str:
     """`LibraryEntry.preview_svg`に保存するためのSVG文字列を生成する。
 
     `viewBox`付きのSVGとして保存するため、後から`rasterize_svg`で任意の
     表示サイズ(テーブルヘッダ90×70・ライブラリカード110×85・登録
     プレビュー168×128)に再ラスタライズできる。
+
+    `molblock`を渡すと、ユーザーが整えた向きをそのまま焼き込む。
     """
-    scene = lineart_render.build_scene(smiles, mode=render_mode)
+    scene = lineart_render.get_or_build_scene(smiles, mode=render_mode, molblock=molblock)
     return lineart_render.render_svg(scene)
 
 
-def rasterize_svg(svg: str, size: tuple[int, int]) -> QPixmap:
-    """SVG文字列を指定サイズの`QPixmap`にラスタライズする。"""
+def rasterize_svg(svg: str, size: tuple[int, int], device_pixel_ratio: float = 1.0) -> QPixmap:
+    """SVG文字列を指定サイズの`QPixmap`にラスタライズする。
+
+    `device_pixel_ratio`(既定1.0)を1より大きくすると、論理サイズ(`size`)は
+    変えずに物理ピクセル数だけ引き上げてラスタライズし、
+    `QPixmap.setDevicePixelRatio()`を設定する。HiDPI画面でのにじみ対策。
+    """
+    physical_w = max(round(size[0] * device_pixel_ratio), 1)
+    physical_h = max(round(size[1] * device_pixel_ratio), 1)
     renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
-    pixmap = QPixmap(*size)
+    pixmap = QPixmap(physical_w, physical_h)
+    pixmap.setDevicePixelRatio(device_pixel_ratio)
     pixmap.fill(Qt.GlobalColor.white)
     painter = QPainter(pixmap)
-    renderer.render(painter)
+    renderer.render(painter, QRectF(0, 0, physical_w, physical_h))
     painter.end()
     return pixmap
-
-
-def realign_bridged_structure_molblock(smiles: str) -> str | None:
-    """橋かけ構造(bridgehead原子を持つ)の場合のみ、3D投影レイアウトのMOLブロックを返す。
-
-    Ketcherの2D自動レイアウトは橋かけ構造をうまく描けないことがあるが、
-    Ketcher自身の描画アルゴリズムは外部から差し替えられない。その代わり、
-    Ketcherの `setMolecule()` はMOLブロックの座標をそのまま尊重して表示する
-    ため、こちらで計算した見やすいレイアウトをMOLブロックとして渡すことで、
-    Ketcherのキャンバス上に反映できる。橋かけ構造でない場合は整列が不要
-    なのでNoneを返す。
-
-    `lineart_render.build_scene(smiles, mode="solid")`と全く同じ経路
-    (同じ`canonical_rotation`)を通す。以前は`orient_canonically`という
-    別実装のPCAベースの向き選択を使っており、対称分子で固有値が縮退する
-    弱点に加えて、カード等のプレビュー画像(こちらは常に
-    `lineart_render`側のアルゴリズムを使う)と向きが一致しないという
-    実害があったため、経路を一本化した。
-    """
-    mol = _mol_from_smiles(smiles)
-    if rdMolDescriptors.CalcNumBridgeheadAtoms(mol) == 0:
-        return None
-    scene = lineart_render.build_scene(smiles, mode="solid")
-    return build_molblock_from_scene(scene)
 
 
 def build_molblock_from_scene(scene: lineart_render.Scene, rotation: tuple[float, float, float, float] = (1, 0, 0, 0)) -> str:
@@ -121,30 +120,12 @@ def build_molblock_from_scene(scene: lineart_render.Scene, rotation: tuple[float
 
     `Scene`は原子・結合・(初期姿勢を含む)配座を自己完結で持っているため、
     3D配座を再生成する必要はなく、`compute_geometry`と同じ回転行列を
-    座標へ直接適用して`RWMol`を組み立て直すだけでよい。
+    座標へ直接適用して`RWMol`を組み立て直すだけでよい
+    (`lineart_render.scene_to_mol`と共有、3Dクリーンアップ機能も同じ
+    経路を使う)。
     """
-    R = lineart_render.quat_to_matrix(rotation) @ scene.initial_rotation
-    xyz = scene.coords @ R.T
-
-    bond_type_map = {1: Chem.BondType.SINGLE, 2: Chem.BondType.DOUBLE, 3: Chem.BondType.TRIPLE}
-    mol = Chem.RWMol()
-    for symbol, charge in zip(scene.symbols, scene.formal_charges):
-        atom = Chem.Atom(symbol)
-        atom.SetFormalCharge(charge)
-        mol.AddAtom(atom)
-    for (begin, end), order in zip(scene.bonds, scene.orders):
-        mol.AddBond(int(begin), int(end), bond_type_map.get(int(order), Chem.BondType.SINGLE))
-
-    conformer = Chem.Conformer(mol.GetNumAtoms())
-    for i in range(mol.GetNumAtoms()):
-        x, y, _ = xyz[i]
-        conformer.SetAtomPosition(i, Point3D(float(x), float(y), 0.0))
-    conformer.Set3D(False)
-    mol.AddConformer(conformer, assignId=True)
-
-    result = mol.GetMol()
-    Chem.SanitizeMol(result)
-    return Chem.MolToMolBlock(result)
+    mol = lineart_render.scene_to_mol(scene, rotation, flatten=True)
+    return Chem.MolToMolBlock(mol)
 
 
 def _mol_from_smiles(smiles: str) -> Chem.Mol:
