@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import structure
+from ..core import lineart_render, structure
 from ..db import library_repo
 from ..db.library_repo import LibraryEntry
 from . import theme
@@ -94,6 +94,7 @@ class LibraryGridWidget(QWidget):
             entries = library_repo.search(self._conn, query)
         else:
             entries = library_repo.list_all(self._conn, order_by_use_count=True)
+        entries = [self._ensure_current_preview(entry) for entry in entries]
 
         self._clear_grid()
         for entry in entries:
@@ -140,11 +141,29 @@ class LibraryGridWidget(QWidget):
         if not entry.smiles:
             return
         try:
-            entry.preview_svg = structure.generate_preview_svg(entry.smiles, entry.render_mode)
+            entry.preview_svg = structure.generate_preview_svg(entry.smiles, entry.render_mode, molblock=entry.molblock)
         except ValueError:
             return
+        entry.renderer_version = lineart_render.CURRENT_RENDERER_VERSION
         library_repo.update(self._conn, entry)
         self.refresh()
+
+    def _ensure_current_preview(self, entry: LibraryEntry) -> LibraryEntry:
+        """保存済み`preview_svg`を焼いた時点のレンダラーバージョンが古ければ
+        自動で焼き直して永続化する。
+
+        以前は「プレビューを更新」ボタンでの手動焼き直ししかなく、レンダラーの
+        実装を変更しても古い絵がDBに残り続ける問題があった(仕様書4.3.1節)。
+        """
+        if not entry.smiles or entry.renderer_version == lineart_render.CURRENT_RENDERER_VERSION:
+            return entry
+        try:
+            entry.preview_svg = structure.generate_preview_svg(entry.smiles, entry.render_mode, molblock=entry.molblock)
+        except ValueError:
+            return entry
+        entry.renderer_version = lineart_render.CURRENT_RENDERER_VERSION
+        library_repo.update(self._conn, entry)
+        return entry
 
 
 class LibraryDialog(QDialog):
@@ -243,12 +262,15 @@ class _LibraryCard(QFrame):
         layout.addWidget(self._refresh_button)
 
     def _set_structure_image(self, entry: LibraryEntry) -> None:
+        dpr = self._image_label.devicePixelRatioF()
         if entry.preview_svg:
-            self._image_label.setPixmap(structure.rasterize_svg(entry.preview_svg, _STRUCTURE_IMAGE_SIZE))
+            self._image_label.setPixmap(structure.rasterize_svg(entry.preview_svg, _STRUCTURE_IMAGE_SIZE, device_pixel_ratio=dpr))
             return
         if entry.smiles:
             try:
-                pixmap = structure.render_structure_image(entry.smiles, size=_STRUCTURE_IMAGE_SIZE)
+                pixmap = structure.render_structure_image(
+                    entry.smiles, size=_STRUCTURE_IMAGE_SIZE, device_pixel_ratio=dpr, molblock=entry.molblock
+                )
                 self._image_label.setPixmap(pixmap)
                 return
             except ValueError:

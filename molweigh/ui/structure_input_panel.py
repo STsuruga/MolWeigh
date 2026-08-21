@@ -79,13 +79,6 @@ class StructureInputPanel(QFrame):
         self._add_button.setStyleSheet(theme.accent_button_style())
         self._add_button.clicked.connect(self._on_add_to_table)
 
-        self._realign_button = QPushButton("橋かけ構造を整列")
-        self._realign_button.setMaximumWidth(_SIDE_COLUMN_WIDTH)
-        self._realign_button.setToolTip(
-            "トリプチセンのような橋かけ構造を、重なりにくい向きに描き直します"
-        )
-        self._realign_button.clicked.connect(self._on_realign)
-
         # 固定サイズで常時レイアウトに存在させる(表示/非表示を切り替えると
         # エラーの有無でボタン位置がずれてしまうため、テキストの有無だけを切り替える)。
         self._error_label = QLabel("")
@@ -100,7 +93,6 @@ class StructureInputPanel(QFrame):
         side_column.addWidget(self._error_label)
         side_column.addStretch(1)
         side_column.addWidget(self._calc_button)
-        side_column.addWidget(self._realign_button)
         side_column.addWidget(self._add_button)
 
         content_row = QHBoxLayout()
@@ -130,10 +122,18 @@ class StructureInputPanel(QFrame):
             self._show_error("構造式エディタが利用できません。")
             return
         self._error_label.setText("")
-        self._ketcher.get_smiles(self._on_smiles_for_add)
+        self._ketcher.get_molblock(self._on_molblock_for_add)
 
-    def _on_smiles_for_add(self, smiles: str | None) -> None:
-        info = self._resolve_smiles(smiles)
+    def _on_molblock_for_add(self, molblock: str | None) -> None:
+        if not molblock:
+            self._show_error("構造式が空です。原子を配置してください。")
+            return
+        try:
+            smiles = structure.smiles_from_molblock(molblock)
+        except ValueError as exc:
+            self._show_error(str(exc))
+            return
+        info = self._resolve_smiles(smiles, molblock=molblock)
         if info is not None:
             self._update_info_labels(info)
             self.added_to_table.emit(info)
@@ -155,40 +155,19 @@ class StructureInputPanel(QFrame):
         except ValueError as exc:
             self._tab_3d.show_error(str(exc))
             return
-        self._tab_3d.request_build(smiles)
+        self._tab_3d.request_build(smiles, molblock=molblock)
 
     def _on_reflect_from_3d(self, molblock: str) -> None:
         if self._ketcher is not None:
             self._ketcher.set_smiles(molblock)
         self._tabs.setCurrentIndex(_TAB_2D_INDEX)
 
-    def _on_realign(self) -> None:
-        if self._ketcher is None:
-            self._show_error("構造式エディタが利用できません。")
-            return
-        self._error_label.setText("")
-        self._ketcher.get_smiles(self._on_smiles_for_realign)
-
-    def _on_smiles_for_realign(self, smiles: str | None) -> None:
-        if not smiles:
-            self._show_error("構造式が空です。原子を配置してください。")
-            return
-        try:
-            molblock = structure.realign_bridged_structure_molblock(smiles)
-        except ValueError as exc:
-            self._show_error(str(exc))
-            return
-        if molblock is None:
-            self._show_error("橋かけ構造ではないため、整列は不要です。")
-            return
-        self._ketcher.set_smiles(molblock)
-
-    def _resolve_smiles(self, smiles: str | None):
+    def _resolve_smiles(self, smiles: str | None, molblock: str | None = None):
         if not smiles:
             self._show_error("構造式が空です。原子を配置してください。")
             return None
         try:
-            return compound_source.resolve_from_smiles(smiles)
+            return compound_source.resolve_from_smiles(smiles, molblock=molblock)
         except ValueError as exc:
             self._show_error(str(exc))
             return None

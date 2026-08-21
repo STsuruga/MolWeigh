@@ -70,12 +70,20 @@ class TestMainWindowBasics:
         assert columns[-1].fw is None
 
     def test_structure_input_panel_added_to_table_fills_first_blank(self, qapp, conn):
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+
+        mol = Chem.MolFromSmiles("CCO")
+        AllChem.Compute2DCoords(mol)
+        molblock = Chem.MolToMolBlock(mol)
+
         window = MainWindow(conn)
-        window._structure_input_panel._on_smiles_for_add("CCO")
+        window._structure_input_panel._on_molblock_for_add(molblock)
         columns = window._reagent_table.columns()
         assert len(columns) == DEFAULT_COLUMN_COUNT
         assert columns[0].formula == "C2H6O"
         assert columns[0].source == "smiles"
+        assert columns[0].molblock == molblock
 
     def test_close_event_shuts_down_structure_input_panel(self, qapp, conn):
         window = MainWindow(conn)

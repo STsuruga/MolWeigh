@@ -50,6 +50,7 @@ class ReagentColumn:
     name: str = ""
     formula: str | None = None
     smiles: str | None = None
+    molblock: str | None = None  # Ketcherの2D座標(見た目専用。同一性判定はsmilesを使う)
     source: str = "manual"
     library_id: int | None = None
     fw: float | None = None
@@ -453,7 +454,14 @@ def _fmt_fw(value: float | None) -> str:
 def _set_thumbnail(label: QLabel, column: ReagentColumn) -> None:
     if column.smiles:
         try:
-            label.setPixmap(structure.render_structure_image(column.smiles, size=_THUMBNAIL_SIZE))
+            label.setPixmap(
+                structure.render_structure_image(
+                    column.smiles,
+                    size=_THUMBNAIL_SIZE,
+                    device_pixel_ratio=label.devicePixelRatioF(),
+                    molblock=column.molblock,
+                )
+            )
             return
         except ValueError:
             pass

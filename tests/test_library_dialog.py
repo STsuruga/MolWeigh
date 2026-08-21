@@ -3,6 +3,7 @@ import sqlite3
 import pytest
 from PySide6.QtWidgets import QMessageBox
 
+from molweigh.core import lineart_render
 from molweigh.db import library_repo, schema
 from molweigh.db.library_repo import LibraryEntry
 from molweigh.ui.library_dialog import LibraryDialog, LibraryGridWidget, _LibraryCard
@@ -122,7 +123,11 @@ class TestDelete:
 
 class TestRefreshPreview:
     def test_click_regenerates_and_persists_preview_svg(self, qapp, conn):
-        entry_id = _seed(conn, name="Ethanol", smiles="CCO")
+        # renderer_versionを現行に合わせておく(食い違うとrefresh()時点で自動焼き直しが
+        # 起き、このテストが検証したい「手動クリック」経路と切り分けられなくなるため)。
+        entry_id = _seed(
+            conn, name="Ethanol", smiles="CCO", renderer_version=lineart_render.CURRENT_RENDERER_VERSION
+        )
         grid = LibraryGridWidget(conn)
         assert library_repo.get(conn, entry_id).preview_svg is None
 
@@ -139,6 +144,34 @@ class TestRefreshPreview:
         _cards(grid)[0]._refresh_button.click()
 
         assert library_repo.get(conn, entry_id).preview_svg is None
+
+
+class TestAutoRebakeStalePreview:
+    """Stage 3: レンダラーのバージョンが古い保存済みpreview_svgを表示時に自動で焼き直す。"""
+
+    def test_stale_renderer_version_is_rebaked_and_persisted_on_refresh(self, qapp, conn):
+        entry_id = _seed(conn, name="Ethanol", smiles="CCO", renderer_version=0)
+        assert library_repo.get(conn, entry_id).preview_svg is None
+
+        LibraryGridWidget(conn)  # コンストラクタがrefresh()を呼ぶ
+
+        saved = library_repo.get(conn, entry_id)
+        assert saved.preview_svg is not None
+        assert saved.renderer_version == lineart_render.CURRENT_RENDERER_VERSION
+
+    def test_current_renderer_version_is_not_rebaked(self, qapp, conn):
+        entry_id = _seed(
+            conn, name="Ethanol", smiles="CCO", renderer_version=lineart_render.CURRENT_RENDERER_VERSION
+        )
+        LibraryGridWidget(conn)
+        assert library_repo.get(conn, entry_id).preview_svg is None
+
+    def test_no_smiles_is_left_untouched(self, qapp, conn):
+        entry_id = _seed(conn, name="No structure", smiles=None, renderer_version=0)
+        LibraryGridWidget(conn)
+        saved = library_repo.get(conn, entry_id)
+        assert saved.preview_svg is None
+        assert saved.renderer_version == 0
 
 
 class TestAddNewRequested:

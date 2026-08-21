@@ -16,6 +16,15 @@ def conn():
     connection.close()
 
 
+def _molblock_for(smiles: str) -> str:
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    mol = Chem.MolFromSmiles(smiles)
+    AllChem.Compute2DCoords(mol)
+    return Chem.MolToMolBlock(mol)
+
+
 @pytest.fixture
 def dialog(qapp, conn):
     d = ReagentEditorDialog(conn)
@@ -46,22 +55,24 @@ class TestFormulaEntry:
 
 class TestStructureEntry:
     def test_smiles_received_fills_formula_and_mw(self, dialog):
-        dialog._on_smiles_received("CCO")
+        molblock = _molblock_for("CCO")
+        dialog._on_molblock_received(molblock)
         assert dialog._formula_input.text() == "C2H6O"
         assert dialog._mw_input.value() == pytest.approx(46.069, rel=1e-4)
         assert dialog._smiles == "CCO"
+        assert dialog._molblock == molblock
 
     def test_empty_smiles_shows_warning(self, dialog, monkeypatch):
         warnings = []
         monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
-        dialog._on_smiles_received(None)
+        dialog._on_molblock_received(None)
         assert warnings
         assert dialog._smiles is None
 
     def test_invalid_smiles_shows_warning(self, dialog, monkeypatch):
         warnings = []
         monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
-        dialog._on_smiles_received("not-a-smiles(((")
+        dialog._on_molblock_received("not a molblock")
         assert warnings
 
 
@@ -76,7 +87,7 @@ class TestStructure3DTabWiring:
 
     def test_valid_molblock_starts_3d_build(self, dialog, monkeypatch):
         requested = []
-        monkeypatch.setattr(dialog._tab_3d, "request_build", lambda smiles: requested.append(smiles))
+        monkeypatch.setattr(dialog._tab_3d, "request_build", lambda smiles, molblock=None: requested.append(smiles))
 
         from rdkit import Chem
 
@@ -100,33 +111,6 @@ class TestStructure3DTabWiring:
 
         assert received == ["fake molblock"]
         assert dialog._tabs.currentIndex() == 0
-
-
-class TestRealign:
-    def test_empty_smiles_shows_warning(self, dialog, monkeypatch):
-        warnings = []
-        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
-        dialog._on_smiles_for_realign(None)
-        assert warnings
-
-    def test_invalid_smiles_shows_warning(self, dialog, monkeypatch):
-        warnings = []
-        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
-        dialog._on_smiles_for_realign("not-a-smiles(((")
-        assert warnings
-
-    def test_non_bridged_shows_information(self, dialog, monkeypatch):
-        infos = []
-        monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: infos.append(a))
-        dialog._on_smiles_for_realign("CCO")
-        assert infos
-
-    def test_bridged_smiles_loads_molblock_into_ketcher(self, dialog, monkeypatch):
-        received = []
-        monkeypatch.setattr(dialog._ketcher, "set_smiles", lambda text: received.append(text))
-        dialog._on_smiles_for_realign("c1ccc2c(c1)C1c3ccccc3C2c2ccccc21")
-        assert len(received) == 1
-        assert "V2000" in received[0]
 
 
 class TestPreviewUpdates:
@@ -191,14 +175,15 @@ class TestSave:
         assert saved.density is None
 
     def test_smiles_is_persisted_when_drawn(self, dialog, conn):
-        dialog._on_smiles_received("CCO")
+        dialog._on_molblock_received(_molblock_for("CCO"))
         dialog._name_input.setText("Ethanol")
         dialog._on_save()
         saved = library_repo.get(conn, dialog.library_id)
         assert saved.smiles == "CCO"
+        assert saved.molblock is not None
 
     def test_preview_svg_is_baked_and_persisted_when_structure_drawn(self, dialog, conn):
-        dialog._on_smiles_received("CCO")
+        dialog._on_molblock_received(_molblock_for("CCO"))
         dialog._name_input.setText("Ethanol")
         dialog._on_save()
         saved = library_repo.get(conn, dialog.library_id)

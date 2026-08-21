@@ -155,6 +155,7 @@ class MainWindow(QMainWindow):
             density=column.density,
             smiles=column.smiles,
             source=column.source,
+            molblock=column.molblock,
         )
         column.library_id = compound_source.save_to_library(self._conn, info)
         column.name = name.strip()
@@ -250,6 +251,7 @@ def _compound_info_to_column(info: CompoundInfo) -> ReagentColumn:
         name=info.name,
         formula=info.formula,
         smiles=info.smiles,
+        molblock=info.molblock,
         source=info.source,
         library_id=info.library_id,
         fw=info.molecular_weight,
@@ -262,6 +264,7 @@ def _library_entry_to_column(entry: LibraryEntry) -> ReagentColumn:
         name=entry.name,
         formula=entry.formula,
         smiles=entry.smiles,
+        molblock=entry.molblock,
         source=entry.source,
         library_id=entry.id,
         fw=entry.molecular_weight,

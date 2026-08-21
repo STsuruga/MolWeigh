@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import formula_parser, structure
+from ..core import formula_parser, lineart_render, structure
 from ..db import library_repo
 from ..db.library_repo import LibraryEntry
 from . import theme
@@ -53,6 +53,7 @@ class ReagentEditorDialog(QDialog):
 
         self.library_id: int | None = None
         self._smiles: str | None = None
+        self._molblock: str | None = None
         self._ketcher: KetcherView | None = None
 
         left_column = self._build_preview_column()
@@ -145,13 +146,8 @@ class ReagentEditorDialog(QDialog):
         apply_structure_button = QPushButton("構造式を反映")
         apply_structure_button.clicked.connect(self._on_apply_structure)
 
-        realign_button = QPushButton("橋かけ構造を整列")
-        realign_button.setToolTip("トリプチセンのような橋かけ構造を、重なりにくい向きに描き直します")
-        realign_button.clicked.connect(self._on_realign)
-
         structure_button_row = QHBoxLayout()
         structure_button_row.addWidget(apply_structure_button)
-        structure_button_row.addWidget(realign_button)
 
         self._name_input = QLineEdit()
         self._name_input.setPlaceholderText("入力")
@@ -198,7 +194,7 @@ class ReagentEditorDialog(QDialog):
         if self._ketcher is None:
             QMessageBox.warning(self, "構造式を反映", "構造式エディタが利用できません。")
             return
-        self._ketcher.get_smiles(self._on_smiles_received)
+        self._ketcher.get_molblock(self._on_molblock_received)
 
     def _on_tab_changed(self, index: int) -> None:
         if index != _TAB_3D_INDEX:
@@ -217,43 +213,25 @@ class ReagentEditorDialog(QDialog):
         except ValueError as exc:
             self._tab_3d.show_error(str(exc))
             return
-        self._tab_3d.request_build(smiles)
+        self._tab_3d.request_build(smiles, molblock=molblock)
 
     def _on_reflect_from_3d(self, molblock: str) -> None:
         if self._ketcher is not None:
             self._ketcher.set_smiles(molblock)
         self._tabs.setCurrentIndex(_TAB_2D_INDEX)
 
-    def _on_realign(self) -> None:
-        if self._ketcher is None:
-            QMessageBox.warning(self, "橋かけ構造を整列", "構造式エディタが利用できません。")
-            return
-        self._ketcher.get_smiles(self._on_smiles_for_realign)
-
-    def _on_smiles_for_realign(self, smiles: str | None) -> None:
-        if not smiles:
-            QMessageBox.warning(self, "橋かけ構造を整列", "構造式が空です。原子を配置してください。")
-            return
-        try:
-            molblock = structure.realign_bridged_structure_molblock(smiles)
-        except ValueError as exc:
-            QMessageBox.warning(self, "橋かけ構造を整列", str(exc))
-            return
-        if molblock is None:
-            QMessageBox.information(self, "橋かけ構造を整列", "橋かけ構造ではないため、整列は不要です。")
-            return
-        self._ketcher.set_smiles(molblock)
-
-    def _on_smiles_received(self, smiles: str | None) -> None:
-        if not smiles:
+    def _on_molblock_received(self, molblock: str | None) -> None:
+        if not molblock:
             QMessageBox.warning(self, "構造式を反映", "構造式が空です。原子を配置してください。")
             return
         try:
+            smiles = structure.smiles_from_molblock(molblock)
             info = structure.parse_smiles(smiles)
         except ValueError as exc:
             QMessageBox.warning(self, "構造式を反映", str(exc))
             return
         self._smiles = smiles
+        self._molblock = molblock
         self._formula_input.setText(info.formula or "")
         self._mw_input.setValue(round(info.molecular_weight, 4))
         self._update_preview()
@@ -285,7 +263,12 @@ class ReagentEditorDialog(QDialog):
 
         if self._smiles:
             try:
-                pixmap = structure.render_structure_image(self._smiles, size=_STRUCTURE_IMAGE_SIZE)
+                pixmap = structure.render_structure_image(
+                    self._smiles,
+                    size=_STRUCTURE_IMAGE_SIZE,
+                    device_pixel_ratio=self._preview_image.devicePixelRatioF(),
+                    molblock=self._molblock,
+                )
                 self._preview_image.setPixmap(pixmap)
                 self._preview_image.setText("")
                 return
@@ -309,7 +292,7 @@ class ReagentEditorDialog(QDialog):
         preview_svg = None
         if self._smiles:
             try:
-                preview_svg = structure.generate_preview_svg(self._smiles)
+                preview_svg = structure.generate_preview_svg(self._smiles, molblock=self._molblock)
             except ValueError:
                 pass
 
@@ -321,8 +304,10 @@ class ReagentEditorDialog(QDialog):
             molecular_weight=mw,
             density=self._density_input.value() or None,
             smiles=self._smiles,
+            molblock=self._molblock,
             source="manual",
             preview_svg=preview_svg,
+            renderer_version=lineart_render.CURRENT_RENDERER_VERSION if preview_svg else 0,
         )
         self.library_id = library_repo.create(self._conn, entry)
         self.accept()
