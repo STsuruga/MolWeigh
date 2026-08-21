@@ -20,42 +20,80 @@ class _SceneBuilderWorker(QObject):
     finished = Signal(object)  # Scene
     failed = Signal(str)
 
-    def __init__(self, smiles: str, mode: str) -> None:
+    def __init__(self, smiles: str, mode: str, molblock: str | None = None) -> None:
         super().__init__()
         self._smiles = smiles
         self._mode = mode
+        self._molblock = molblock
 
     def run(self) -> None:
         try:
-            scene = lineart_render.build_scene(self._smiles, mode=self._mode)
+            scene = lineart_render.get_or_build_scene(self._smiles, mode=self._mode, molblock=self._molblock)
         except ValueError as exc:
             self.failed.emit(str(exc))
             return
         self.finished.emit(scene)
 
 
+class _CleanupWorker(QObject):
+    finished = Signal(object)  # lineart_render.CleanupResult
+    failed = Signal(str)
+
+    def __init__(self, scene: Scene, mode: str) -> None:
+        super().__init__()
+        self._scene = scene
+        self._mode = mode
+
+    def run(self) -> None:
+        try:
+            result = lineart_render.cleanup_geometry(self._scene, mode=self._mode)
+        except ValueError as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(result)
+
+
 class SceneBuilder(QObject):
-    """呼び出し側は`build()`を呼び、`sceneReady`/`failed`シグナルを購読する。"""
+    """呼び出し側は`build()`/`cleanup()`を呼び、`sceneReady`/`cleanupReady`/`failed`
+    シグナルを購読する。"""
 
     sceneReady = Signal(object)  # Scene
+    cleanupReady = Signal(object)  # lineart_render.CleanupResult
     failed = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._thread: QThread | None = None
-        self._worker: _SceneBuilderWorker | None = None
+        self._worker: _SceneBuilderWorker | _CleanupWorker | None = None
         self._generation = 0
 
-    def build(self, smiles: str, mode: str = "solid") -> None:
-        self._generation += 1
-        generation = self._generation
-        self._cleanup()
+    def build(self, smiles: str, mode: str = "solid", molblock: str | None = None) -> None:
+        """`molblock`を渡すと、solidモードでもKetcherで描いた向きに近い3D姿勢を選ぶ
+        (`lineart_render.build_scene`のmolblock引数、Stage 2)。"""
+        generation = self._start_job()
+        worker = _SceneBuilderWorker(smiles, mode, molblock)
+        worker.finished.connect(lambda scene: self._on_finished(generation, scene))
+        self._run(worker, generation)
 
+    def cleanup(self, scene: Scene, mode: str = "optimize") -> None:
+        """現在のSceneに`lineart_render.cleanup_geometry`を適用する(3Dクリーンアップ機能)。"""
+        generation = self._start_job()
+        worker = _CleanupWorker(scene, mode)
+        worker.finished.connect(lambda result: self._on_cleanup_finished(generation, result))
+        self._run(worker, generation)
+
+    def shutdown(self) -> None:
+        self._stop_thread()
+
+    def _start_job(self) -> int:
+        self._generation += 1
+        self._stop_thread()
+        return self._generation
+
+    def _run(self, worker: _SceneBuilderWorker | _CleanupWorker, generation: int) -> None:
         thread = QThread(self)
-        worker = _SceneBuilderWorker(smiles, mode)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda scene: self._on_finished(generation, scene))
         worker.failed.connect(lambda message: self._on_failed(generation, message))
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
@@ -65,18 +103,19 @@ class SceneBuilder(QObject):
         self._worker = worker
         thread.start()
 
-    def shutdown(self) -> None:
-        self._cleanup()
-
     def _on_finished(self, generation: int, scene: Scene) -> None:
         if generation == self._generation:
             self.sceneReady.emit(scene)
+
+    def _on_cleanup_finished(self, generation: int, result) -> None:
+        if generation == self._generation:
+            self.cleanupReady.emit(result)
 
     def _on_failed(self, generation: int, message: str) -> None:
         if generation == self._generation:
             self.failed.emit(message)
 
-    def _cleanup(self) -> None:
+    def _stop_thread(self) -> None:
         if self._thread is not None:
             self._thread.quit()
             self._thread.wait()

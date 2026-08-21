@@ -52,3 +52,68 @@ class TestStructure3DTab:
         assert len(received) == 1
         assert "V2000" in received[0]
         tab.shutdown()
+
+    def test_cleanup_buttons_enabled_once_scene_ready(self, qapp):
+        tab = Structure3DTab(on_reflect=lambda molblock: None)
+        assert not tab._orient_button.isEnabled()
+        tab.request_build("CCCCCCCCCC")
+        _run_until(lambda: tab._orient_button.isEnabled())
+        assert tab._optimize_button.isEnabled()
+        assert tab._reembed_button.isEnabled()
+        assert not tab._undo_button.isEnabled()  # まだクリーンアップしていない
+        tab.shutdown()
+
+    def test_orient_recomputes_rotation_synchronously(self, qapp):
+        tab = Structure3DTab(on_reflect=lambda molblock: None)
+        tab.request_build("CCCCCCCCCC")
+        _run_until(lambda: tab._orient_button.isEnabled())
+
+        tab._on_orient_clicked()
+
+        assert tab._scene is not None
+        assert not tab._undo_button.isEnabled()  # 向きの再計算はUndo対象外
+
+    def test_optimize_updates_scene_and_enables_undo(self, qapp):
+        tab = Structure3DTab(on_reflect=lambda molblock: None)
+        tab.request_build("CCCCCCCCCC")
+        _run_until(lambda: tab._optimize_button.isEnabled())
+        original_scene = tab._scene
+
+        tab._start_cleanup("optimize")
+        assert not tab._optimize_button.isEnabled()  # 処理中は無効化
+        _run_until(lambda: tab._optimize_button.isEnabled())
+
+        assert tab._scene is not None
+        assert tab._scene is not original_scene
+        assert tab._undo_button.isEnabled()
+        assert "エネルギー変化" in tab._status_label.text()
+        tab.shutdown()
+
+    def test_undo_restores_previous_scene(self, qapp):
+        tab = Structure3DTab(on_reflect=lambda molblock: None)
+        tab.request_build("CCCCCCCCCC")
+        _run_until(lambda: tab._optimize_button.isEnabled())
+        original_scene = tab._scene
+
+        tab._start_cleanup("optimize")
+        _run_until(lambda: tab._undo_button.isEnabled())
+
+        tab._on_undo_clicked()
+
+        assert tab._scene is original_scene
+        assert not tab._undo_button.isEnabled()
+        tab.shutdown()
+
+    def test_optimize_preserves_camera_by_keeping_old_initial_rotation(self, qapp):
+        tab = Structure3DTab(on_reflect=lambda molblock: None)
+        tab.request_build("CCCCCCCCCC")
+        _run_until(lambda: tab._optimize_button.isEnabled())
+        old_initial_rotation = tab._scene.initial_rotation
+
+        tab._start_cleanup("optimize")
+        _run_until(lambda: tab._optimize_button.isEnabled())
+
+        import numpy as np
+
+        assert np.array_equal(tab._scene.initial_rotation, old_initial_rotation)
+        tab.shutdown()

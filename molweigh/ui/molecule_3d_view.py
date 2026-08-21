@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter, QPen, QPolygonF, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
@@ -21,9 +21,18 @@ Quaternion = tuple[float, float, float, float]  # (w, x, y, z)
 _IDENTITY_ROTATION: Quaternion = (1.0, 0.0, 0.0, 0.0)
 _ZOOM_MIN = 0.2
 _ZOOM_MAX = 8.0
-_INERTIA_DECAY = 0.92
-_INERTIA_STOP_THRESHOLD = 1e-4
 _KEY_ROTATION_STEP = np.radians(15)
+
+# 仮想球半径 = 0.5*min(w,h)*ARCBALL_SENSITIVITY。1.0(半径そのまま)だと中央付近の
+# ドラッグに対して回転が急峻になり「ずれている」と感じやすいため縮小する。
+ARCBALL_SENSITIVITY = 0.7
+
+# Ctrl+ドラッグ(画面平面内回転)の感度。1pxあたりのラジアン数。
+# 画面中心からの角度(atan2)を使う実装は中心付近で方向が不安定になり
+# (中心に近いほど同じ距離の動きが大きい角度変化になる)、感度過多・回転の
+# 飽和(=急激な符号反転で打ち消し合う)として体感された。水平ドラッグ量に
+# 単純比例させる方式にして、中心特異点を排除している。
+ROLL_SENSITIVITY = 0.006
 
 
 def _quat_multiply(a: Quaternion, b: Quaternion) -> Quaternion:
@@ -69,16 +78,18 @@ class Molecule3DView(QWidget):
         self._pan_offset = np.zeros(2)
 
         self._dragging = False
+        self._rolling = False
         self._panning = False
         self._last_arcball = np.array([0.0, 0.0, 1.0])
         self._last_pos: QPointF | None = None
 
-        # ドラッグ終了時の角速度を保持し、慣性で回転を減衰させる。
-        self._velocity_axis = np.array([0.0, 1.0, 0.0])
-        self._velocity_angle = 0.0
-        self._inertia_timer = QTimer(self)
-        self._inertia_timer.setInterval(16)
-        self._inertia_timer.timeout.connect(self._on_inertia_tick)
+        # 隠線ギャップ判定はO(n^2)で最も重く、姿勢(回転)とウィンドウサイズにしか
+        # 依存しない。ズーム・パンだけの再描画では回転が変わらないため、直前の
+        # 結果をそのまま使い回す(S1: 交差判定キャッシュ)。
+        self._geom_cache_scene: Scene | None = None
+        self._geom_cache_rotation: Quaternion | None = None
+        self._geom_cache_size: tuple[int, int] | None = None
+        self._geom_cache_result = None
 
     def set_scene(self, scene: Scene | None) -> None:
         self._scene = scene
@@ -90,7 +101,6 @@ class Molecule3DView(QWidget):
 
     def reset_view(self) -> None:
         """`Scene.initial_rotation`(見やすい初期角度)へ戻す。"""
-        self._stop_inertia()
         self._rotation = _IDENTITY_ROTATION
         self._scale = 1.0
         self._pan_offset = np.zeros(2)
@@ -100,17 +110,16 @@ class Molecule3DView(QWidget):
 
     def _arcball_vector(self, pos: QPointF) -> np.ndarray:
         w, h = max(self.width(), 1), max(self.height(), 1)
-        r = min(w, h) / 2
+        r = 0.5 * min(w, h) * ARCBALL_SENSITIVITY
         x = (pos.x() - w / 2) / r
         y = -(pos.y() - h / 2) / r
         d2 = x * x + y * y
-        if d2 <= 1.0:
+        if d2 <= 0.5:
             z = np.sqrt(1.0 - d2)
         else:
-            n = np.sqrt(d2)
-            x, y = x / n, y / n
-            z = 0.0
-        return np.array([x, y, z])
+            z = 0.5 / np.sqrt(d2)  # Holroyd方式: 縁の外側は双曲面に逃がし不連続を防ぐ
+        v = np.array([x, y, z])
+        return v / np.linalg.norm(v)
 
     def _apply_rotation(self, axis: np.ndarray, angle: float) -> None:
         dq = _quat_from_axis_angle(np.asarray(axis, dtype=float), angle)
@@ -120,16 +129,25 @@ class Molecule3DView(QWidget):
     # --- マウス操作 ---------------------------------------------------
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        self._stop_inertia()
         if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = True
-            self._last_arcball = self._arcball_vector(event.position())
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self._rolling = True
+            else:
+                self._dragging = True
+                self._last_arcball = self._arcball_vector(event.position())
         elif event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
         self._last_pos = event.position()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._dragging:
+        if self._rolling and self._last_pos is not None:
+            dx = event.position().x() - self._last_pos.x()
+            delta = -dx * ROLL_SENSITIVITY
+            if abs(delta) > 1e-9:
+                self._apply_rotation(np.array([0.0, 0.0, 1.0]), delta)
+            self._last_pos = event.position()
+            self.update()
+        elif self._dragging:
             cur = self._arcball_vector(event.position())
             prev = self._last_arcball
             axis = np.cross(prev, cur)
@@ -137,8 +155,6 @@ class Molecule3DView(QWidget):
             angle = float(np.arccos(dot))
             if np.linalg.norm(axis) > 1e-9 and angle > 1e-6:
                 self._apply_rotation(axis, angle)
-                self._velocity_axis = axis / (np.linalg.norm(axis) + 1e-9)
-                self._velocity_angle = angle
             self._last_arcball = cur
             self.update()
         elif self._panning and self._last_pos is not None:
@@ -150,8 +166,7 @@ class Molecule3DView(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
-            if abs(self._velocity_angle) > 1e-4:
-                self._inertia_timer.start()
+            self._rolling = False
         elif event.button() == Qt.MouseButton.MiddleButton:
             self._panning = False
         self._last_pos = None
@@ -178,20 +193,6 @@ class Molecule3DView(QWidget):
             return
         self.update()
 
-    # --- 慣性 -----------------------------------------------------------
-
-    def _stop_inertia(self) -> None:
-        self._inertia_timer.stop()
-        self._velocity_angle = 0.0
-
-    def _on_inertia_tick(self) -> None:
-        self._velocity_angle *= _INERTIA_DECAY
-        if abs(self._velocity_angle) < _INERTIA_STOP_THRESHOLD:
-            self._stop_inertia()
-            return
-        self._apply_rotation(self._velocity_axis, self._velocity_angle)
-        self.update()
-
     # --- 描画 -------------------------------------------------------------
 
     def paintEvent(self, event) -> None:  # noqa: ARG002
@@ -203,8 +204,22 @@ class Molecule3DView(QWidget):
             painter.end()
             return
 
-        params = RenderParams(width=self.width(), height=self.height())
-        geometry = compute_geometry(self._scene, self._rotation, params)
+        size = (self.width(), self.height())
+        if (
+            self._geom_cache_result is not None
+            and self._geom_cache_scene is self._scene
+            and self._geom_cache_rotation == self._rotation
+            and self._geom_cache_size == size
+        ):
+            geometry = self._geom_cache_result
+        else:
+            params = RenderParams(width=size[0], height=size[1])
+            geometry = compute_geometry(self._scene, self._rotation, params)
+            self._geom_cache_scene = self._scene
+            self._geom_cache_rotation = self._rotation
+            self._geom_cache_size = size
+            self._geom_cache_result = geometry
+        params = geometry.params  # キャッシュ命中時はローカルのparamsが未定義のため、geometry側から取得する
 
         painter.translate(self._pan_offset[0], self._pan_offset[1])
         painter.translate(self.width() / 2, self.height() / 2)

@@ -1,5 +1,6 @@
 from PySide6.QtCore import QEventLoop, QTimer
 
+from molweigh.core import lineart_render as lr
 from molweigh.ui.scene_builder import SceneBuilder
 
 
@@ -60,4 +61,18 @@ class TestSceneBuilder:
 
         assert len(results) == 1
         assert len(results[0].coords) == 4
+        builder.shutdown()
+
+    def test_cleanup_emits_cleanup_ready(self, qapp):
+        scene = lr.build_scene("CCCCCCCCCC", mode="solid")
+        builder = SceneBuilder()
+        results = []
+        builder.cleanupReady.connect(results.append)
+
+        builder.cleanup(scene, mode="optimize")
+        _run_until(lambda: len(results) == 1)
+
+        assert len(results) == 1
+        assert isinstance(results[0], lr.CleanupResult)
+        assert len(results[0].scene.coords) == len(scene.coords)
         builder.shutdown()
