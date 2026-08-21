@@ -37,6 +37,15 @@ jobs:
       - name: Build Ketcher (bundled 2D editor)
         run: python scripts/build_ketcher.py
 
+      # PyInstallerのBUNDLE(icon=...)は.icnsのみ受け付ける。物理Mac実機が
+      # ないため、molweigh.spec同梱の.icoからmacOSネイティブのiconutilで
+      # .icnsをここで生成する(scripts/build_macos_icon.py参照)。
+      - name: Generate macOS app icon (.icns)
+        if: matrix.os == 'macos-latest'
+        run: |
+          pip install Pillow
+          python scripts/build_macos_icon.py
+
       - name: Run tests (core + Qt-independent modules)
         run: python -m pytest tests/test_calc.py tests/test_formula_parser.py tests/test_lineart_render.py tests/test_structure.py tests/test_schema.py tests/test_library_repo.py tests/test_template_repo.py tests/test_paths.py -q
 

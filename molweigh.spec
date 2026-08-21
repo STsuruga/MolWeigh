@@ -20,6 +20,14 @@ block_cipher = None
 REPO_ROOT = os.path.abspath(SPECPATH)
 KETCHER_DIR = os.path.join(REPO_ROOT, "molweigh", "ui", "vendor", "ketcher")
 
+# Windowsは.icoをそのまま使える。macOSは.icnsが必要(PyInstallerのBUNDLEは.icoを
+# 受け付けない)。物理Mac実機がないため、.icnsはCI側(macOSランナー)で
+# .github/workflows/build.ymlのステップにより.icoから生成し、同じパスに置く。
+# ローカルWindowsビルドでは.icnsが存在しないため、その場合はicon=Noneにフォール
+# バックする(BUNDLE自体sys.platform=="darwin"でしか実行されないので実害はない)。
+ICON_ICO = os.path.join(REPO_ROOT, "molweigh", "resources", "app_icon.ico")
+ICON_ICNS = os.path.join(REPO_ROOT, "molweigh", "resources", "app_icon.icns")
+
 if not os.path.isdir(KETCHER_DIR):
     raise SystemExit(
         f"Ketcherの静的ビルドが見つかりません: {KETCHER_DIR}\n"
@@ -71,6 +79,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=ICON_ICO if os.path.isfile(ICON_ICO) else None,
 )
 
 coll = COLLECT(
@@ -88,10 +97,10 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="MolWeigh.app",
-        icon=None,
+        icon=ICON_ICNS if os.path.isfile(ICON_ICNS) else None,
         bundle_identifier="com.molweigh.app",
         info_plist={
             "NSHighResolutionCapable": "True",
-            "CFBundleShortVersionString": "0.1.0",
+            "CFBundleShortVersionString": "0.2.0",
         },
     )
