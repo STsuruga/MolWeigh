@@ -43,6 +43,21 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE library ADD COLUMN preview_svg TEXT;
     ALTER TABLE library ADD COLUMN render_mode TEXT NOT NULL DEFAULT 'auto';
     """,
+    # version 3: Ketcherの2D座標つきMOLブロックを保持する(core/lineart_render.py
+    # ::build_scene()のmolblock引数)。SMILESはトポロジーしか持たないため、SMILES
+    # 経由の再構築のたびに座標(向き)が失われ再生成されていた問題への対処。
+    # 既存レコードはmolblockがNULLのままSMILES経由の従来経路にフォールバックする。
+    """
+    ALTER TABLE library ADD COLUMN molblock TEXT;
+    """,
+    # version 4: 保存済みpreview_svgを焼いた時点のレンダラーバージョンを記録する
+    # (core/lineart_render.py::CURRENT_RENDERER_VERSION)。レンダラーの実装を
+    # 変更してもこの値と食い違うまで気づかず古い絵が残り続ける問題があったため、
+    # 表示時に自動で焼き直す(ui/library_dialog.py)。既存レコードは0のままとなり、
+    # 現行バージョン(1以上)と食い違うため次回表示時に自動的に焼き直される。
+    """
+    ALTER TABLE library ADD COLUMN renderer_version INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 

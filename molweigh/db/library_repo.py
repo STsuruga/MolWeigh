@@ -22,6 +22,8 @@ class LibraryEntry:
     updated_at: str = ""
     preview_svg: str | None = None
     render_mode: str = "auto"
+    molblock: str | None = None
+    renderer_version: int = 0  # preview_svgを焼いた時点のCURRENT_RENDERER_VERSION
 
 
 def _now_iso() -> str:
@@ -35,13 +37,13 @@ def create(conn: sqlite3.Connection, entry: LibraryEntry) -> int:
         """
         INSERT INTO library
             (name, cas_number, formula, molecular_weight, density, smiles,
-             source, use_count, created_at, updated_at, preview_svg, render_mode)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             source, use_count, created_at, updated_at, preview_svg, render_mode, molblock, renderer_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             entry.name, entry.cas_number, entry.formula, entry.molecular_weight,
             entry.density, entry.smiles, entry.source, entry.use_count, now, now,
-            entry.preview_svg, entry.render_mode,
+            entry.preview_svg, entry.render_mode, entry.molblock, entry.renderer_version,
         ),
     )
     conn.commit()
@@ -82,13 +84,13 @@ def update(conn: sqlite3.Connection, entry: LibraryEntry) -> None:
         UPDATE library
         SET name = ?, cas_number = ?, formula = ?, molecular_weight = ?,
             density = ?, smiles = ?, source = ?, use_count = ?, updated_at = ?,
-            preview_svg = ?, render_mode = ?
+            preview_svg = ?, render_mode = ?, molblock = ?, renderer_version = ?
         WHERE id = ?
         """,
         (
             entry.name, entry.cas_number, entry.formula, entry.molecular_weight,
             entry.density, entry.smiles, entry.source, entry.use_count,
-            _now_iso(), entry.preview_svg, entry.render_mode, entry.id,
+            _now_iso(), entry.preview_svg, entry.render_mode, entry.molblock, entry.renderer_version, entry.id,
         ),
     )
     conn.commit()
@@ -122,4 +124,6 @@ def _row_to_entry(row: sqlite3.Row) -> LibraryEntry:
         updated_at=row["updated_at"],
         preview_svg=row["preview_svg"],
         render_mode=row["render_mode"],
+        molblock=row["molblock"],
+        renderer_version=row["renderer_version"],
     )

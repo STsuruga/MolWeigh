@@ -38,6 +38,7 @@ class CompoundInfo:
     smiles: str | None
     source: Source
     library_id: int | None = None
+    molblock: str | None = None  # Ketcherの2D座標(見た目専用。同一性判定はsmilesを使う)
 
 
 def resolve_compound(conn: sqlite3.Connection, query: str) -> CompoundInfo | None:
@@ -67,8 +68,12 @@ def resolve_from_formula(formula: str) -> CompoundInfo:
     )
 
 
-def resolve_from_smiles(smiles: str) -> CompoundInfo:
-    """SMILES文字列から分子量・化学式を算出する(ライブラリへの自動保存はしない)。"""
+def resolve_from_smiles(smiles: str, molblock: str | None = None) -> CompoundInfo:
+    """SMILES文字列から分子量・化学式を算出する(ライブラリへの自動保存はしない)。
+
+    `molblock`を渡すと、Ketcherでユーザーが整えた2D座標(見た目)を
+    `CompoundInfo`に持ち回せる(化合物の同一性判定は引き続き`smiles`を使う)。
+    """
     info = structure.parse_smiles(smiles)
     return CompoundInfo(
         name=smiles,
@@ -77,6 +82,7 @@ def resolve_from_smiles(smiles: str) -> CompoundInfo:
         density=None,
         smiles=smiles,
         source="smiles",
+        molblock=molblock,
     )
 
 
@@ -90,6 +96,7 @@ def save_to_library(conn: sqlite3.Connection, info: CompoundInfo, name: str | No
         formula=info.formula,
         density=info.density,
         smiles=info.smiles,
+        molblock=info.molblock,
     )
     return library_repo.create(conn, entry)
 
@@ -111,6 +118,7 @@ def _resolve_from_library(conn: sqlite3.Connection, query: str) -> CompoundInfo 
         smiles=entry.smiles,
         source="library",
         library_id=entry.id,
+        molblock=entry.molblock,
     )
 
 

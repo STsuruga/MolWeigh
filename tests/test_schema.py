@@ -45,6 +45,30 @@ class TestMigrate:
         assert row[0] == "auto"
         assert row[1] is None
 
+    def test_adds_molblock_column_defaulting_to_null(self):
+        conn = sqlite3.connect(":memory:")
+        schema.migrate(conn)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(library)").fetchall()}
+        assert "molblock" in columns
+        conn.execute(
+            "INSERT INTO library (name, molecular_weight, source, created_at, updated_at) "
+            "VALUES ('X', 1.0, 'manual', '', '')"
+        )
+        row = conn.execute("SELECT molblock FROM library").fetchone()
+        assert row[0] is None
+
+    def test_adds_renderer_version_column_defaulting_to_zero(self):
+        conn = sqlite3.connect(":memory:")
+        schema.migrate(conn)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(library)").fetchall()}
+        assert "renderer_version" in columns
+        conn.execute(
+            "INSERT INTO library (name, molecular_weight, source, created_at, updated_at) "
+            "VALUES ('X', 1.0, 'manual', '', '')"
+        )
+        row = conn.execute("SELECT renderer_version FROM library").fetchone()
+        assert row[0] == 0
+
     def test_migrating_from_version_1_preserves_existing_data(self):
         # version 1のスキーマだけを素朴に作り、そこにレコードを入れてから
         # migrate()した場合でも、既存データが失われないことを確認する。
