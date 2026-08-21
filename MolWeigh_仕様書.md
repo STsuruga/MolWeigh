@@ -6,7 +6,7 @@
 - リポジトリ: `D:\ユーザー\shuta\ドキュメント\MolWeigh`(GitHub: https://github.com/STsuruga/MolWeigh、public)
 - 起動(開発時): `python main.py`
 - 配布: Win/Mac向けにPyInstallerでパッケージ済みexe/appをGitHub Releasesで配布(現行 [v0.1.0](https://github.com/STsuruga/MolWeigh/releases/tag/v0.1.0)、詳細は9章)
-- テスト: `tests/` 配下に294件(pytest)
+- テスト: `tests/` 配下に335件(pytest)
 - 主要スタック: PySide6(GUI) / RDKit(化学計算・構造処理) / SQLite(DB) / Ketcher(2D構造式エディタ、Web埋め込み) / 自前実装のChemDraw風線画レンダラー(`core/lineart_render.py`、Qt非依存・SVG出力)
 - 引継ぎメモ: 新規チャットで作業を再開する場合はまず[`HANDOFF.md`](HANDOFF.md)を参照(「今どこにいて、次に何をすべきか」の要約)。この仕様書は技術詳細のリファレンス。
 
@@ -159,13 +159,31 @@ Qt非依存(numpy + RDKitのみに依存)の純関数モジュール。分子ご
 
 どちらか一方でも該当すれば立体に切り替える(カンファーは交差数ゼロだが原子間距離だけが破綻しており、両方の指標が必要なことを示す実例)。塩・水和物はSMILESを`.`で分割し、フラグメントごとに`build_scene`を再帰呼び出しして向きを個別に決めたうえで、重原子数の多い順に1.6Å間隔で横並びに配置する(ETKDGが対イオンや結晶水を分子本体の任意の位置に置くため、素朴に描くと重なる対策)。単独分子は`H2O`/`HCl`のように水素を先に書く慣習に従う。
 
-**立体モードの配座生成(`lineart_render.embed_and_optimize`)**: `core/structure_3d.py`とは別の実装。見やすさ優先で、24配座を`EmbedMultipleConfs`(ETKDGv3、固定シード)し、力場(MMFF94、フォールバックUFF)は「破綻した形を弾く」役割に留め、**採用する配座は投影したときの見やすさ(`_clarity`:48方向サンプリングで全原子ペア最小距離を最大化)で選ぶ**。単一配座のETKDGでは鎖状分子がゴーシュに折れることがある(デカンで実測確認)ため、複数配座からの選択が必須と判断した。
+**`molblock`引数によるKetcher座標の直接利用(`build_flat_scene_from_molblock`、2026-08-22追加)**: `build_scene(smiles, mode, molblock=...)`に2D座標つきMOLブロックを渡すと、CoordGenでの再レイアウトをスキップし、Ketcherでユーザーが整えた向き・配置をそのまま使う。SMILESは化合物の同一性判定・DB検索キー用、molblockは見た目(座標)専用という二本立て(旧仕様の課題「SMILES経由の`get_smiles()`で2D座標が全消失し、`build_scene`が毎回CoordGenでレイアウトを再生成するため、ユーザーが整えた向きが保持されない」への対処)。
+
+- 塩・水和物もフラグメント分割せず、molblock全体を1つの(連結していない)`Mol`としてそのまま`_scene_from_mol`に渡す(`_scene_from_mol`は連結成分をまたいでも動作するため、フラグメント抽出・再配置のロジックを新設する必要がない)。「単原子フラグメントか(H2O/HCl方式のラベルを使うか)」の判定は`mol`全体の原子数ではなく`Chem.GetMolFrags`で得た連結成分ごとに行うよう修正済み(2026-08-22。修正前は複数フラグメントのmolを渡すと成立しなかった)。
+- Ketcher上でフラグメントが重なって配置されていた場合の自動フォールバックは、専用の重なり判定ロジックを新設せず、既存の`auto`判定(`FLAT_DMIN_MIN`/`FLAT_MAX_CROSSINGS`)をそのまま再利用する。`_layout_quality`の`dmin`は全原子ペアの最小距離を測るため、フラグメント間の重なりも自然に検知でき、検知されれば`auto`モードの通常のフォールバック(SMILES経由の`_arrange_fragments`)へ自然に流れる(`mode="flat"`を明示指定した場合はこのフォールバックを行わず、molblockの座標をそのまま尊重する)。
+- Ketcherは陽子(H)を明示的に持つ場合があるため、`Chem.MolFromMolBlock`(立体化学をwedge+2D座標から確定させる)の後に`Chem.RemoveHs`で暗黙水素表現に揃える。この順序(sanitize→立体確定→RemoveHs)でキラル中心の情報が保持されることを回帰テストで固定している。
+- molblockの解析に失敗した場合(`None`)は通常のSMILES経由の経路にフォールバックする。
+
+**立体モードの配座生成(`lineart_render.embed_and_optimize`)**: `core/structure_3d.py`とは別の実装。見やすさ優先で、24配座を`EmbedMultipleConfs`(ETKDGv3、固定シード)し、力場(MMFF94、フォールバックUFF)は「破綻した形を弾く」役割に留め、**採用する配座は投影したときの見やすさ(`_clarity`:48方向サンプリングで全原子ペア最小距離を最大化)で選ぶ**。単一配座のETKDGでは鎖状分子がゴーシュに折れることがある(デカンで実測確認)ため、複数配座からの選択が必須と判断した。埋め込み(`EmbedMultipleConfs`)・力場最適化(`MMFFOptimizeMoleculeConfs`/`UFFOptimizeMoleculeConfs`)ともに`numThreads=0`(システムの最大コア数を使用)を指定して並列化している(2026-08-22追加。選択ロジック自体は変更せず、同じ24配座全てを対象にしたまま計算だけを並列化したもの)。
 
 **初期姿勢(`canonical_rotation`)**: 旧`orient_canonically`(PCA主軸3本から3候補)は使わない。トリプチセンのような対称分子は共分散行列の固有値が縮退し固有ベクトルが不定になるため機能しない。代わりにFibonacci格子で半球上に160方向をサンプリングし、各方向を奥行きにした2D投影の最小原子間距離を総当たりでスコア化する。
 
+**molblockに近い3D姿勢の選択(`_build_solid_scene_matching_drawing`、Stage 2、2026-08-22追加)**: 橋かけ構造など2D座標をそのまま使えない分子でも、molblockがあれば「描いた向きに近い3D姿勢」を選ぶ。`embed_and_optimize`と違い、molblockをSMILESに変換して再パースするのではなく`Chem.MolFromMolBlock`のMolをそのまま使う(`Chem.RemoveHs`→`Chem.AddHs`は既存原子の順序を変えないため、molblock由来の重原子2D座標と新規生成する3D配座の重原子を同じ添字で対応づけられる)。Kabsch法(`_kabsch_rotation`)で2D座標に最も近い回転を求め、`canonical_rotation`と同じFibonacci格子160方向の全探索に「描いた向きとの近さ(RMSD)」のペナルティ項を加えたスコア(`_rotation_matching_drawing`、λ=0.4)で最終的な回転・配座を選ぶ。
+
+- **設計変更の経緯**: 改善提案書の当初案は「Kabsch解を初期値に±20°の局所探索」だったが、実測でトリプチセンにおいて機能しないことが判明した。molblockの2D座標自体がCoordGenの破綻したレイアウト(auto判定で立体化に切り替わった原因そのもの)であることが多く、Kabsch解が最初から悪い向きになり、±20°の狭い局所探索ではそこから抜け出せず、既存`canonical_rotation`の全方位探索より明らかに読みにくい結果になった(画像で目視確認)。そのため全方位探索に切り替えた(計算量は増えるが、実測でcanonical_rotationと同程度、0.3〜0.5秒)。
+- **埋め込み失敗時の早期打ち切り**: 3D埋め込み自体が失敗する場合(分子の結合・立体配置に起因し、molblock経由かSMILES経由かに依らず同じ結果になる)は`ValueError`を送出し、`build_scene`側のSMILES経由フォールバック(`embed_and_optimize`)への二度手間(同じ失敗を待つのに数秒×2)を避ける。
+- **3Dタブへの配線**: `ui/scene_builder.py::SceneBuilder.build()`と`ui/structure_3d_tab.py::Structure3DTab.request_build()`にも`molblock`引数を追加し、インタラクティブな3Dタブでもこの向き合わせが効くようにした(静的なサムネイル/プレビュー画像だけでなく、ユーザーが実際に触る3Dビューにも反映)。
+
 **隠線ギャップ・深度キュー**: 全結合ペアの線分交差をnumpyでベクトル化して判定し(O(n²)だが結合数は高々数百)、交差点でのZは端点からの補間`t`/`u`で求める(端点のZで比較すると斜め交差で誤る)。奥側の結合に「手前側の線幅×`gap_ratio`(2.5)」のギャップを開ける(固定px幅だとズーム時に破綻するため)。深度→濃淡変換には`min_span`ガード(力場最適化後の数値誤差で平面分子がまだらのグレーになるのを防ぐ)、`depth_gamma`(線形だと中間深度が一律グレーに沈むのを防ぐ)、`min_t`下限(長鎖の奥端が消えるのを防ぐ)の3つのガードを入れている(いずれも実測で必要と判明)。
 
+- **交差判定キャッシュ(`ui/molecule_3d_view.py`、2026-08-22追加)**: このO(n²)判定は姿勢(クォータニオン)とウィンドウサイズのみに依存し、ズーム(`_scale`)・パン(`_pan_offset`)では結果が変わらない。`Molecule3DView`はシーン参照・回転・ウィンドウサイズが直前の描画から変わっていなければ`compute_geometry()`の結果をそのまま使い回し、ズーム/パンだけの再描画で無駄な再計算をしない。
+
 **共有ジオメトリ(`compute_geometry`)**: 描画片(線分・楔形・ラベル、色はRGB整数タプル)を計算する部分を`RenderGeometry`として切り出し、SVG文字列化(`render_svg`)とQPainter直描き(4.3節)の両方がこれを共有する。二重実装を避けるための設計。
+
+- **表示スケールは分子の3D直径(全原子ペア間の最大距離、回転に依存しない)を基準に決める**(2026-08-22改訂)。旧実装は現在の投影後バウンディングボックスでスケールを決めていたため、3Dタブでインタラクティブに回転させると見かけの輪郭の大きさが向きによって伸縮し「回転中にズームしているように見える」不具合があった(ユーザー報告により判明)。直径基準に変えたことで見かけの大きさは向きによらず一定になる。SVG静的出力側は影響を受けにくい(1回きりの投影のため)が同じ関数を共有するため恩恵は両方に及ぶ。
+- **画面上の回転中心 = 分子の重心**(2026-08-22改訂)。`scene.coords`は重心が原点になるよう構築済みのため、`xy.mean(axis=0)`は回転してもほぼ(0,0)のまま保たれる。旧実装は投影後バウンディングボックスの中心を画面中心に合わせていたため、非対称な分子では回転につれてこの中心が分子本体に対して揺れ動き、「アークボール回転の重心が分子の重心とズレる」ように見えていた(ユーザー報告により判明)。
 
 **処理時間の実測**(20〜28原子、仕様書内部データ): 配座生成(初回のみ)は284ms〜3.1秒、描画/フレームは分子サイズにほぼ依存せず2ms前後。**描画自体はPythonのまま60fpsに十分間に合う**(JS/WebGLへ逃がす必要はない)。旧QPainter実装が遅かったのはフレームごとにRDKit側で再計算していたためで、前計算済みのnumpy配列に行列積を掛けるだけなら問題にならない。一方**配座生成は最大3〜4秒**かかるため、必ずバックグラウンドスレッド(4.3節`scene_builder.py`)に逃がす。
 
@@ -175,8 +193,25 @@ Qt非依存(numpy + RDKitのみに依存)の純関数モジュール。分子ご
 
 - **タブ切替時の非同期生成(`scene_builder.py::SceneBuilder`)**: 「3D」タブに切り替えると、Ketcherの`getMolfile()`→`structure.smiles_from_molblock()`(楔形からRDKitが立体化学を自動判定、`MolToSmiles`)で得たSMILESを`QThread`上でバックグラウンド生成する。構造が変わって再度呼ばれた場合、世代カウンタ(`_generation`)で古いジョブの結果を無視する(「生成中に構造が変わったら前のジョブを破棄する」という要件)。
 - **`Molecule3DView(QWidget)`**: `paintEvent`で`compute_geometry`の結果を直接描画する(`QGraphicsView`は不要)。`QWebEngineView`を一切使わないため、既知の環境依存クラッシュ(WebEngineを大量に使うテストでのネイティブクラッシュ、4.9節参照)から解放される。
-  - 操作: 左ドラッグ=アークボール回転(ドラッグ点を仮想球上のベクトルに写し、その間の回転を現在姿勢に左から合成)、ホイール=ズーム、中ドラッグ=パン、矢印キー=15°ステップ回転、`R`キーで初期姿勢にリセット、ドラッグ終了時は角速度を`QTimer`(16ms間隔)で0.92倍ずつ減衰させる慣性を持つ。
-- **`Structure3DTab(QWidget)`**: 上記2つを束ね、「配座を生成中…」の状態表示、失敗時のエラー表示、「この向きを2Dに反映」「向きをリセット」ボタンを提供する。
+  - 操作: 左ドラッグ=アークボール回転(ドラッグ点を仮想球上のベクトルに写し、その間の回転を現在姿勢に左から合成)、**Ctrl+左ドラッグ=画面平面内回転(ロール)**(2026-08-22追加。当初は画面中心からのマウス角度=atan2の差分をZ軸回転角とする実装にしたが、中心付近で方向が不安定になり感度過多・回転の飽和として体感されたため、`ROLL_SENSITIVITY`(0.006 rad/px)による水平ドラッグ量の単純比例方式に変更し中心特異点を排除した)、ホイール=ズーム、中ドラッグ=パン、矢印キー=15°ステップ回転、`R`キーで初期姿勢にリセット。仮想球半径は`ARCBALL_SENSITIVITY`(0.7)で縮小し、縁の外側はHolroyd方式(双曲面)で滑らかに繋ぐ(2026-08-22改訂、旧Shoemake方式は縁で不連続だった)。ドラッグ終了時に速度を減衰させる慣性回転は、ユーザーが「ドラッグ後に滑る感じが不快」と明示的に指摘したため撤去済み(離した瞬間に停止する)。
+- **`Structure3DTab(QWidget)`**: 上記2つを束ね、「配座を生成中…」の状態表示、失敗時のエラー表示、「この向きを2Dに反映」「向きをリセット」ボタンを提供する。加えて3Dクリーンアップ機能(下記4.3.1節)のボタン一式もここに配置する。
+
+#### 4.3.1 3Dクリーンアップ機能(`core/lineart_render.py::cleanup_geometry`、2026-08-22追加)
+
+「クリーンアップ」は用途が3つあり、3つの独立したボタンとして提供する(1つのボタンに混ぜると期待と結果がずれるため)。
+
+| ボタン | 機能 | 中身 | 処理 |
+|---|---|---|---|
+| **向きを整える** | C | `recompute_initial_rotation(scene)` で初期姿勢だけ再計算 | 同期・ほぼ即時。回しすぎて分からなくなった時用 |
+| **形を整える** | A | `cleanup_geometry(scene, mode="optimize")`(MMFF94、フォールバックUFF) | `SceneBuilder`経由で非同期。歪んだ結合長・結合角を正す(ChemDrawのClean Up相当) |
+| **配座を選び直す** | B | `cleanup_geometry(scene, mode="reembed")`(`embed_and_optimize`を再実行し`_clarity`で再選択) | `SceneBuilder`経由で非同期。折れ曲がった鎖状分子を伸ばす等、形そのものを変えたい場合 |
+
+- **水素の扱い**: `Scene`は水素を省略しているため(4.2節)、`cleanup_geometry`は`scene_to_mol(scene)`でMolを再構築した後、`Chem.AddHs(mol, addCoords=True)`で近似座標の水素を復元し、**重原子を`ForceField.AddFixedPoint()`で固定して水素だけを先に緩和してから**本番の最適化にかける(水素なしで最適化するとsp3中心の角度が破綻するため)。改善提案書は「§2 Stage 1の変更(水素付きMol/3D molblockをSceneに保持)に相乗りする」案を推奨していたが、Stage 1は平面(flat)モードのみを対象にスコープを絞ったため、この水素復元は独立実装した(改善提案書§3.1の「対処2」)。
+- **塩・水和物**: `reembed`はSMILESに分割してフラグメントごとに生成し直し、既存の`_arrange_fragments`で再配置する(`embed_and_optimize`に複数フラグメントのSMILESを直接渡すと重なる恐れがあるため)。`optimize`は現在の相対配置を尊重し分割しない。
+- **立体化学の検証**: 最適化前後で`Chem.AssignStereochemistryFrom3D` → 正準SMILES比較により立体表記の変化を検知する(`CleanupResult.stereo_changed`)。原子インデックスに依存しない比較にしているため、`reembed`で原子順序が変わっても正しく機能する。変化していればUIに警告を表示する。
+- **カメラ維持**: `cleanup_geometry`が返す新しい`Scene`の`initial_rotation`は採用せず、UI側(`Structure3DTab._on_cleanup_ready`)で旧`Scene`の`initial_rotation`に差し替えてから表示する。ユーザーが手で回転させた`Molecule3DView._rotation`はそのまま変更しないため、クリーンアップ後も視点が飛ばない。「向きを整える」だけは逆に新しい初期姿勢を採用し、ビューをリセットする(それが機能の目的のため)。
+- **Undo**: 直前の`Scene`を1つだけ保持し、「クリーンアップを取り消す」ボタンで復元する(履歴スタックは持たない)。
+- **2Dへは書き戻さない**: クリーンアップ結果はあくまで3Dプレビュー内に閉じる(4.5節の設計方針を維持)。
 
 ### 4.4 (D) 「この向きを2Dに反映」(`structure.build_molblock_from_scene`)
 
@@ -210,15 +245,20 @@ Ketcherには標準で「3D Viewer」ボタン(Miewエンジンによる表示)�
 
 ### 4.7 構造式画像のレンダリング入口とプレビュー保存
 
-**`core/structure.py::render_structure_image(smiles, size)`** — アプリ全体で使われる構造式サムネイル/プレビュー画像のオンザフライ生成入口。`lineart_render.build_scene(smiles, mode="auto")` → `render_svg()` → `rasterize_svg()`(`QSvgRenderer`+`QPainter`でSVGを指定サイズの`QPixmap`にラスタライズ)という経路を通る。
+**`core/structure.py::render_structure_image(smiles, size)`** — アプリ全体で使われる構造式サムネイル/プレビュー画像のオンザフライ生成入口。`lineart_render.get_or_build_scene(smiles, mode="auto")` → `render_svg()` → `rasterize_svg()`(`QSvgRenderer`+`QPainter`でSVGを指定サイズの`QPixmap`にラスタライズ)という経路を通る。
+
+**シーンキャッシュ(`lineart_render.get_or_build_scene`、Stage 3、2026-08-22追加)**: `render_structure_image`/`generate_preview_svg`/3Dタブ(`scene_builder.py`)がそれぞれ個別に`build_scene`を呼んでいた構造をやめ、`(molblock, smiles, mode)`をキーにしたインメモリの`dict`キャッシュを共有する。`Scene`は生成後に書き換えられない設計(回転は非破壊)なので、複数の呼び出し元で同じインスタンスを安全に共有できる。サイズ上限・追い出しは実装していない(個人利用規模のライブラリを想定した割り切り)。テスト用に`clear_scene_cache()`を用意。
 
 - `reagent_table.py`(テーブル列ヘッダーのサムネイル、90×70px)
 - `reagent_editor_dialog.py`(登録プレビューカードの構造式画像、168×128px、保存前でSMILESのみの段階)
 
 **`LibraryEntry.preview_svg`(DB保存、7章参照)** — ライブラリ登録済みの化合物は、毎回SVGを生成し直すのではなく`preview_svg`列に焼いたSVGを`rasterize_svg()`で直接ラスタライズする(`library_dialog.py`のカードグリッドが該当。カードを多数同時に描く際の負荷軽減が目的)。`preview_svg`が`None`(未保存・旧データ)の場合は`render_structure_image`にフォールバックする。
 
-- **保存時**: `ReagentEditorDialog._on_save()`が`structure.generate_preview_svg(smiles)`(既定`render_mode="auto"`)で焼いたSVGを`LibraryEntry.preview_svg`にセットして保存する。
+**HiDPI対応(2026-08-22追加)**: `rasterize_svg(svg, size, device_pixel_ratio=1.0)`は指定時、論理サイズ(`size`)は変えずに物理ピクセル数だけ`device_pixel_ratio`倍でラスタライズし`QPixmap.setDevicePixelRatio()`を設定する(既定1.0=従来通り、後方互換)。呼び出し元(`reagent_table.py`のサムネイル・`library_dialog.py`のカード画像・`reagent_editor_dialog.py`の登録プレビュー)は表示先`QLabel`の`devicePixelRatioF()`を渡してHiDPI画面でのにじみを防ぐ。
+
+- **保存時**: `ReagentEditorDialog._on_save()`が`structure.generate_preview_svg(smiles)`(既定`render_mode="auto"`)で焼いたSVGを`LibraryEntry.preview_svg`にセットして保存する(このとき`renderer_version`も`lineart_render.CURRENT_RENDERER_VERSION`にセットする)。
 - **「プレビューを更新」ボタン**(ライブラリカード): 構造式やモードを後から直したときに、保存済み`preview_svg`を明示的に焼き直して`library_repo.update()`で永続化できる。
+- **自動焼き直し(2026-08-22追加)**: `LibraryGridWidget.refresh()`はカードを作る前に各エントリの`renderer_version`を`lineart_render.CURRENT_RENDERER_VERSION`と比較し、食い違っていれば`preview_svg`を自動で焼き直して永続化する。レンダラーの実装を変更しても手動の「プレビューを更新」を押すまで古い絵が残り続けていた問題への対処。`CURRENT_RENDERER_VERSION`はレンダラーの出力(見た目)が変わる修正をするたびにインクリメントする運用(既存レコードは`renderer_version=0`のため、この仕組み導入時点で全件が次回表示時に自動的に焼き直される)。
 
 ### 4.8 3D関連実装の変遷(参考)
 
@@ -241,6 +281,7 @@ Ketcherには標準で「3D Viewer」ボタン(Miewエンジンによる表示)�
 name: str = ""
 formula: str | None = None
 smiles: str | None = None
+molblock: str | None = None      # Ketcherの2D座標(見た目専用。同一性判定はsmilesを使う。2026-08-22追加)
 source: str = "manual"           # "library" | "pubchem" | "formula_parser" | "smiles" | "manual"
 library_id: int | None = None
 fw: float | None = None          # 分子量。4桁精度で丸めて保持
@@ -263,6 +304,7 @@ density: float | None
 smiles: str | None
 source: Literal["library", "pubchem", "formula_parser", "smiles"]
 library_id: int | None = None
+molblock: str | None = None      # Ketcherの2D座標(見た目専用。2026-08-22追加)
 ```
 
 ### `LibraryEntry`(`db/library_repo.py`) — ライブラリ1件
@@ -281,6 +323,8 @@ created_at: str = ""
 updated_at: str = ""
 preview_svg: str | None = None   # 保存時に焼いたSVG(4.7節)。未保存/旧データはNone
 render_mode: str = "auto"        # "auto" | "flat" | "solid"
+molblock: str | None = None      # Ketcherの2D座標(DBスキーマversion 3、2026-08-22追加)
+renderer_version: int = 0        # preview_svgを焼いた時点のCURRENT_RENDERER_VERSION(DBスキーマversion 4、2026-08-22追加)
 ```
 
 ### `Template`(`db/template_repo.py`) — 保存済みテンプレート
@@ -308,10 +352,12 @@ updated_at: str = ""
 
 ## 7. データベース(`db/schema.py`)
 
-SQLite、`PRAGMA user_version`によるバージョン管理マイグレーション。現在version 2:
+SQLite、`PRAGMA user_version`によるバージョン管理マイグレーション。現在version 4:
 
 - **version 1**: `library`テーブル: `id, name, cas_number, formula, molecular_weight NOT NULL, density, smiles, source NOT NULL, use_count DEFAULT 0, created_at, updated_at` / `templates`テーブル: `id, name, payload TEXT NOT NULL, created_at, updated_at`
 - **version 2**: `library`に`preview_svg TEXT`(4.7節、保存済みプレビューSVG)と`render_mode TEXT NOT NULL DEFAULT 'auto'`を追加。既存レコードは`preview_svg IS NULL`のまま`render_structure_image()`のオンザフライ生成にフォールバックするため、マイグレーション時の一括再生成は不要。
+- **version 3**(2026-08-22): `library`に`molblock TEXT`を追加。Ketcherの2D座標つきMOLブロックを保持し、SMILES経由の再構築で座標(向き)が失われる問題に対処する(4.2節参照)。既存レコードは`molblock IS NULL`のままSMILES経由の従来経路(CoordGenでの再レイアウト)にフォールバックする。
+- **version 4**(2026-08-22): `library`に`renderer_version INTEGER NOT NULL DEFAULT 0`を追加。保存済み`preview_svg`を焼いた時点のレンダラーバージョン(`lineart_render.CURRENT_RENDERER_VERSION`)を記録し、レンダラーの実装変更後に自動で焼き直すために使う(4.7節)。既存レコードは`renderer_version=0`のままとなり、次回表示時に自動的に焼き直される。
 
 保存先は`db/paths.py`がOSごとに解決(Windows: `%APPDATA%/MolWeigh/molweigh.db`、macOS: `~/Library/Application Support/MolWeigh/`、その他: `~/.local/share/MolWeigh/`)。
 
@@ -374,7 +420,7 @@ Win/Mac双方をPyInstallerで単一アプリにパッケージし、GitHub Acti
 
 ## 10. テスト方針
 
-- `tests/`配下にファイル単位でpytestテストを配置(294件)。
+- `tests/`配下にファイル単位でpytestテストを配置(335件)。
 - Qt依存のテストはセッションスコープの`qapp`フィクスチャ(オフスクリーンプラットフォーム)を使用。
 - **既知の環境依存事項**: `QWebEngineView`を伴うテスト(Ketcher・PubChem埋め込みブラウザ関連)を大量に同一プロセスで実行すると、蓄積したリソースが原因でPySide6がまれにネイティブクラッシュすることがある(exit code 127でサマリー行が出ない、または`Windows fatal exception`のスタックトレースが出て`threading.Thread.start()`自体が失敗する、など症状は複数パターンある)。これはテスト対象コードの不具合ではなく環境依存の既知の問題。`StructureInputPanel`/`ReagentEditorDialog`が3Dタブ(`Structure3DTab`)を持つようになったことで1テストあたりのオブジェクト数が増え、`test_structure_input_panel.py`・`test_reagent_editor_dialog.py`はファイル単位どころかクラス単位でもまれに閾値を超えてクラッシュすることがある(逆に3Dタブ自体は`QWebEngineView`を使わないので、単体では負荷を増やさない)。疑わしい場合はクラス単位、それでも再現するならテスト単位までチャンクを細かくして「個々のテストロジックは全て正しいか」を切り分けること(2026-08時点で両ファイルとも個別実行では全件パス確認済み)。exit codeだけでなく「N passed」のサマリー行の有無で成否を判定すること。
 
@@ -382,7 +428,11 @@ Win/Mac双方をPyInstallerで単一アプリにパッケージし、GitHub Acti
 
 ## 11. 既知の制約・未実装事項
 
-- **分子構造の描画品質について、ユーザーから「まだ不満がある」との発言があるが、具体的に何が不満かは未聴取(最優先で確認すべき事項)。** 線画の見た目(線の太さ・隠線ギャップの出方)や、`render_mode`(`auto`/`flat`/`solid`)を手動切り替えるUIが無いことが候補として考えられるが、憶測の域を出ない。新機能実装に入る前に、まずユーザーに直接確認すること。
+- **分子構造の描画品質への不満は解消済み(2026-08-22、`MolWeigh_改善提案書.md`のフェーズ1〜3で対応完了)**: (1) 3Dビューのアークボール回転がドラッグと感覚的にずれる、(2) SMILES経由の再構築(Ketcher→`get_smiles()`→`build_scene`)で描画のたびに座標がゼロから再生成され、ユーザーが整えた向きが保持されない、の2点。旧記載の「具体的に何が不満か未聴取」は解消。
+  - (1)は感度定数`ARCBALL_SENSITIVITY`(0.7)+Holroyd方式への差し替えで対応(4.3節)。加えて実機フィードバックにより、ドラッグ後の慣性回転の撤去、回転中に見かけの大きさが伸縮するバグの修正(表示スケールを分子の3D直径基準に変更)、回転の重心が分子の重心とズレるバグの修正(画面中心合わせを重心基準に変更)、Ctrl+ドラッグによる画面平面内回転(ロール)の追加も行った。
+  - (2)は`molblock`を一次表現として保持する変更(4.2節「`molblock`引数によるKetcher座標の直接利用」、DBスキーマversion 3)で対応完了。`CompoundInfo`/`ReagentColumn`/`LibraryEntry`はいずれも`molblock`フィールドを持ち、`build_scene`もflat/auto判定時にこれを使う。塩・水和物はフラグメント分割・再配置のロジックを新設せず、既存の`auto`判定(`_layout_quality`)をそのまま再利用して重なりを検知・フォールバックする設計にした(専用の重なり判定コードが不要になった)。
+  - solidモードでの向き一致(改善提案書§2 Stage 2)も実装済み(2026-08-22)。橋かけ構造などでもmolblockがあれば「描いた向きに近い3D姿勢」をKabsch法+全方位探索で選ぶ(4.2節参照)。これで改善提案書§1〜§2(フェーズ1〜6)は全て対応完了。
+- **3Dタブのクリーンアップ機能(向きを整える/形を整える/配座を選び直す)は実装済み(2026-08-22、改善提案書§3対応)**。詳細は4.3.1節。水素復元は改善提案書が推奨した「§2 Stage 1に相乗り」ではなく独立実装(Stage 1がflatモードのみのスコープだったため)。
 - ライブラリの部分一致検索で複数件ヒットした場合の候補選択UIは未実装(現状は完全一致優先、なければ最初の1件を自動採用)。
 - `TemplateEditDialog`の試薬追加は、ライブラリの先頭エントリ(使用回数順)を仮追加するだけの簡易実装で、専用の選択UIはない。
 - `StructureEditorDialog`(モーダル版のKetcherダイアログ)は実装済みだが現在どこからも呼び出されていない未使用クラス。
