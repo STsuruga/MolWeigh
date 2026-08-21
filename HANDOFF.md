@@ -11,139 +11,148 @@
 ライブラリ・化合物検索・分子構造描画を備えたPySide6製デスクトップアプリ。
 リポジトリ: https://github.com/STsuruga/MolWeigh (public)。
 
-## 現在の状態(2026-08-19時点)
+## 現在の状態(2026-08-22時点)
 
-- Phase 1〜6(計算コア・DB・RDKit/PubChem連携・GUI)は完成、テスト294件全パス。
-- **分子構造の描画部分を今回のセッションで全面刷新した**(自前のChemDraw風
-  線画レンダラー`core/lineart_render.py` + QPainter直描きの3Dタブ)。
-  詳細と設計判断の経緯は仕様書4章、特に4.8節「3D関連実装の変遷」を参照。
-  **3Dmol.js → 自前WebEngine版 → 3Dmol.js → 現行のQPainter版、と3回作り
-  直している**。同じ問題(実機で白紙描画)に当たったら4.8節をまず読むこと。
-- ユーザーから「分子構造の描画はまだ不満あるけど一回リリース」との発言あり。
-  **具体的に何が不満かはこのセッションでは聞けていない**。次のセッションで
-  真っ先に確認すべき事項。憶測だが、線画の見た目の質(線の太さ・隠線ギャップの
-  出方)や、`render_mode`(`auto`/`flat`/`solid`)を手動切り替えるUIが
-  まだ無いことが候補として考えられる。
-- **Win/Mac向けの初回リリース(v0.1.0)を今回のセッションで完了した**。
-  https://github.com/STsuruga/MolWeigh/releases/tag/v0.1.0
-  Windows版はローカルビルド・実機動作確認まで完了、GitHub Actions CIで
-  Windows/macOS両方のビルドが成功し、両OS分のzipをGitHub Releaseに添付
-  済み。進捗は下記「パッケージング/リリース」節を参照。
+- Phase 1〜6(計算コア・DB・RDKit/PubChem連携・GUI)は完成、テストは323件全パス。
+- **`MolWeigh_改善提案書.md`(分子構造描画の改善提案書)のフェーズ1〜6を
+  全て実装し、v0.2.0としてリリース済み**。詳細と設計判断の経緯(当初案からの
+  変更点とその理由を含む)は仕様書4章に全て記載済み。以下は概要のみ:
+  1. **アークボール回転**(仕様書4.3節): 感度定数化+Holroyd方式への差し替え、
+     慣性の撤去(ユーザーが「滑る感じが不快」と指摘)、回転中の見かけの
+     ズーム/重心ズレの修正(表示スケール・画面中心合わせを分子の3D直径・
+     重心基準に変更)、Ctrl+ドラッグの画面平面内回転(ロール)を追加。
+  2. **molblock一次表現化**(仕様書4.2節「molblock引数によるKetcher座標の
+     直接利用」): SMILES経由の再構築で座標(向き)が失われる問題に対処。
+     DBスキーマversion 3で`molblock`列を追加。
+  3. **3D構造クリーンアップ機能**(仕様書4.3.1節): 「向きを整える/形を整える
+     (MMFF最適化)/配座を選び直す/取り消す」の4ボタン。立体化学の変化を
+     正準SMILES比較で検知して警告。
+  4. **シーンキャッシュ**(仕様書4.7節): `lineart_render.get_or_build_scene`
+     で`render_structure_image`/`generate_preview_svg`/3Dタブの計算を集約。
+     DBスキーマversion 4で`renderer_version`列を追加、表示時に古い
+     `preview_svg`を自動で焼き直す。
+  5. **solidモードのKabsch向き一致**(仕様書4.2節): 橋かけ構造などで
+     molblockの2D座標に近い3D姿勢を選ぶ。**当初案の「Kabsch解を初期値に
+     ±20°局所探索」はトリプチセンで機能しないことが実測で判明**し、
+     `canonical_rotation`と同じ全方位探索+描画との近さペナルティに設計変更
+     した(詳細は仕様書4.2節、または`lineart_render.py::_rotation_matching_drawing`
+     のdocstring参照)。
+  6. 「橋かけ構造を整列」ボタンは撤去(上記2・5により不要になったため)。
+- **アプリアイコンを追加し、v0.2.0としてWin/Mac向けにリリース済み**。
+  リリースURL: https://github.com/STsuruga/MolWeigh/releases/tag/v0.2.0
+  Windows版はローカルビルド・実機動作確認(新アイコン表示・3Dタブの新ボタン
+  含む)まで完了。macOS版はCI成功のみ確認(物理Mac実機なし、v0.1.0から続く
+  既知の制約)。
 
 ## アーキテクチャの要点(詳細は仕様書1章・4章)
 
 ```
 core/lineart_render.py   Qt非依存の線画レンダラー本体(SVG出力)。平面/立体を
                           「実際にレイアウトして破綻を測る」方式で自動判定。
+                          molblock引数でKetcher座標を直接使う経路、Kabsch法
+                          によるsolidモード向き一致、cleanup_geometry()による
+                          3Dクリーンアップ、get_or_build_scene()による
+                          シーンキャッシュもここに実装。
 core/structure.py         SMILES↔RDKit Molの窓口。render_structure_image()が
-                          唯一の共通描画入口。realign_bridged_structure_molblock()
-                          は「橋かけ構造を整列」ボタン用(lineart_renderと
-                          同じcanonical_rotationを通るよう統一済み=今回直した
-                          不具合、後述)。
+                          唯一の共通描画入口(内部でget_or_build_sceneを経由)。
+                          realign_bridged_structure_molblock()は撤去済み
+                          (2026-08-22、下記参照)。
 ui/molecule_3d_view.py    QWebEngineViewを使わないQPainter直描きの3Dビュー。
-ui/structure_3d_tab.py    3Dタブの中身(Molecule3DView + SceneBuilder + 反映ボタン)。
-ui/scene_builder.py       3D配座生成をバックグラウンドスレッドで行うワーカー。
+                          アークボール回転・Ctrl+ドラッグロール・幾何キャッシュ。
+ui/structure_3d_tab.py    3Dタブの中身(Molecule3DView + SceneBuilder + 反映
+                          ボタン + クリーンアップ4ボタン)。
+ui/scene_builder.py       3D配座生成・クリーンアップ処理をバックグラウンド
+                          スレッドで行うワーカー(build()/cleanup()の2経路)。
 ui/structure_editor.py    Ketcher埋め込み(get_smiles/get_molblock)。
 ```
 
 ## このセッションで踏んだ地雷(次に同じ轍を踏まないために)
 
-1. **`.strip()`はMOLブロックを壊す**。Ketcherの`getMolfile()`結果に
-   `.strip()`をかけると必須の空行(1行目)が消え、RDKitのパースが全行ズレて
-   失敗する。`structure_editor.py`の`_on_poll_result`は`.rstrip()`に修正済み。
-   同様の文字列処理をどこかに追加するときは要注意。
-2. **向き選択アルゴリズムは1つに統一すること**。かつて`structure.py`に
-   独自のPCAベース`orient_canonically`があり、`lineart_render.py`の
-   球面サンプリング方式`canonical_rotation`と別々に存在していた結果、
-   「Ketcherに書き戻す向き」と「カードのプレビュー」が同じ分子なのに
-   違う向きで表示される不具合が実際に起きた(ユーザー報告で発覚)。今は
-   `realign_bridged_structure_molblock`も`lineart_render.build_scene`を
-   通るよう統一済み。**新しい「向きを決める」処理を書きたくなったら、まず
-   既存の`canonical_rotation`を使えないか検討すること**。
-3. **QWebEngineViewを大量に使うテストは同一プロセスでクラッシュしうる**
-   (`Windows fatal exception`、exit code 127など症状は複数パターン)。
-   `test_structure_input_panel.py`・`test_reagent_editor_dialog.py`は
-   ファイル単位どころかクラス単位でもまれに落ちる。個々のテストロジックが
-   正しいかはテスト単位まで分けて確認すること(仕様書9章に詳細)。
+1. **キャッシュ導入時、条件分岐の片方だけで変数を定義すると危険。**
+   `Molecule3DView.paintEvent`にジオメトリキャッシュ(S1)を入れた際、
+   `params`をキャッシュ未使用時(else節)にしか定義していなかったため、
+   2回目以降の再描画(キャッシュ命中)で`UnboundLocalError`が発生した
+   (ウェッジ・ラベルを描く分子でのみ顕在化するため、単純なテストでは
+   見逃しやすい)。修正は`RenderGeometry`が元々`params`を保持していたので
+   そこから取得するだけで済んだ。**キャッシュのif/else分岐を書くときは、
+   両方の分岐で最終的に必要な変数が全て揃うか確認すること。**
 
-## パッケージング/リリース(完了 — v0.1.0公開済み)
+2. **浮動小数点誤差は「理論上[0,1]のはず」の値を平気で外れる。**
+   深度→濃淡変換で`(zv-zmin)/zspan`を分数乗(`depth_gamma`)する際、
+   理論上は[0,1]のはずの値が補間点では浮動小数点誤差でわずかに負に
+   なることがあり、負数の分数乗が複素数になって`TypeError`で落ちる
+   (特定の回転角でのみ再現するため、決め打ちの数値テストでは気づき
+   にくい。多数の回転角を総当たりで試すテストで発見した)。対策は
+   べき乗の直前で値を`[0,1]`にクランプするだけ。**「数学的にこの範囲に
+   収まるはず」という前提でべき乗・平方根・逆三角関数を使う箇所は、
+   浮動小数点誤差を疑ってクランプを入れておくと安全。**
 
-- `molweigh.spec`(PyInstaller仕様)をリポジトリ直下に追加。Ketcherの
-  静的ビルド(`molweigh/ui/vendor/ketcher/`、`scripts/build_ketcher.py`で
-  事前生成が必要)とRDKitのデータファイルを同梱する。spec内で`__file__`は
-  使えない(PyInstallerが`exec()`するため未定義)。代わりにPyInstallerが
-  注入する`SPECPATH`を使うこと。
-- `.github/workflows/build.yml`を追加。**物理Mac実機がないため、macOS
-  ビルドはGitHub Actionsの`macos-latest`ランナーで行う方針**(Windows側は
-  ローカルで直接ビルド・検証可能)。`workflow_dispatch`(手動実行)と
-  `v*`タグpushの両方でトリガーされる。
-- **Windows版はローカルビルド→実機起動→スクリーンショットで動作確認済み**
-  (ソースツリー外の作業ディレクトリから起動し、相対パス依存のバグを
-  検出できる状態で確認)。ユーザーから「exe化したときにバックエンド機能が
-  壊れていないか確認して」との明示的な指示があったため、以下を確認した:
-  - Ketcher(QWebEngineView+ローカルHTTPサーバー)がツールバーごと正常に
-    ロードされ、実際にベンゼン環を描画できた(インタラクティブに動作)。
-  - PubChemパネル(QWebEngineView+HTTPS)が実際のNIH/PubChemページを
-    ロードできた → `requests`/`certifi`のCA証明書バンドルが凍結ビルドでも
-    正しく解決されている証拠。
-  - `db/paths.py`のAppDataパス解決 → 既存の開発時DB(`%APPDATA%\MolWeigh\
-    molweigh.db`)がexe版でもそのまま読み込めた(ライブラリカードに
-    DMAP/aspirinが表示され、新レンダラーのSVGプレビューも正しく描画)。
-  - **QPainter直描きの3Dタブ**(今回のセッションで最も大きく変更した部分)
-    →「2D編集」でベンゼン環を描き、「3D」タブに切り替えて正常にレンダリング
-    されることを確認。「この向きを2Dに反映」「向きをリセット」ボタンも
-    表示された。このタブはWebEngineに依存しないため、パッケージング起因の
-    問題が起きるリスクはそもそも低いが、念のため確認できた。
-  - 上記により、`requests`/HTTPS証明書・`__file__`相対パスのデータファイル
-    (Ketcherベンダーディレクトリ・RDKitデータ)・OS別AppDataパス解決という、
-    「開発時は動くがexe化すると壊れる」典型的な落とし穴は一通り確認済み。
-  - macOSビルドは物理実機がないため実機動作は未確認だが、CIビルド自体は
-    成功している(GitHub Actions run `32209970484`、両OSとも成功、
-    成果物`MolWeigh-windows`/`MolWeigh-macos`をアップロード済み)。
-    CDXML連携等未実装機能は対象外。
-  - **CI構築で踏んだ地雷**(`scripts/build_ketcher.py`、2件とも修正済み):
-    1. `subprocess.run(["npm", ...])`は`shell=False`だとWindowsで
-       `FileNotFoundError: [WinError 2]`になる。`npm`は`npm.cmd`という
-       シムでCreateProcessが直接実行できないため。`shutil.which()`で
-       解決した実パスを渡すよう修正。ローカルで気づかなかったのは、
-       Ketcherのベンダーディレクトリが既にこのスクリプト以前の方法で
-       作られていて、このスクリプトのnpm呼び出し自体を実行していな
-       かったため。
-    2. GitHub ActionsのWindowsランナーはコンソールが既定でcp1252になって
-       おり、日本語の`print()`が`UnicodeEncodeError`で落ちる。
-       `sys.stdout.reconfigure(encoding="utf-8")`で回避。他のスクリプトで
-       Windows CI上で日本語を`print()`する場合は同じ問題に当たりうる。
-    3. **`actions/upload-artifact`はディレクトリをアップロードする際に
-       シンボリックリンクを実体化(コピー)する。** macOSの`.app`バンドル
-       内のQtフレームワークは`Versions/Current -> A`等のシンボリックリンク
-       を多用しており、これが実体化されると本来200MB台のバンドルが
-       3.7GBまで肥大化した(実際に発生し、気づかず初回ダウンロードを
-       試みて2分でタイムアウトしたことで発覚)。対策として`build.yml`の
-       macOSジョブでは`ditto -c -k --sequesterRsrc --keepParent`で
-       ランナー上で先にzip化してから単一ファイルとしてアップロードする
-       よう変更済み(Windows側も`Compress-Archive`で統一)。**ディレクトリ
-       ごとアーティファクトとしてアップロードする設計は避け、必ず
-       ランナー上でアーカイブ化してから単一ファイルをアップロードする方が
-       安全**、というのが得られた教訓。
-  - **窓ターゲティングの罠**: exe化した別プロセスのウィンドウをPowerShellの
-    `SetForegroundWindow`で操作しようとした際、`Get-Process`の
-    `MainWindowHandle`が安定する前にクリックすると、誤って全く別の
-    ウィンドウ(このセッションではIDE自体)をクリックしてしまったことがある。
-    プロセス起動後は数秒待ってから`MainWindowTitle`/`MainWindowHandle`が
-    有効な値になっているか確認し、`SetForegroundWindow`実行後は必ず
-    `GetForegroundWindow()`で実際に意図したハンドルが前面に来たかを
-    検証してからクリックすること。
-- 進捗は本セッションの残りタスクを参照。中断した場合、`git log`と
-  `gh run list`でどこまで終わっているか確認できる。
+3. **「局所探索」は初期値が悪いと機能しない。実測で確認すること。**
+   solidモードのKabsch向き一致で、改善提案書の原案通り「Kabsch解を
+   初期値に±20°局所探索」を実装したところ、トリプチセンで明らかに
+   読みにくい結果になった。原因はKetcherの2D自動レイアウト(CoordGenの
+   出力)自体が破綻したレイアウトであることが多く、Kabsch解が最初から
+   悪い向きになり、狭い局所探索では抜け出せなかったため。**改善提案書や
+   設計ドキュメントに書かれた「初期値+局所探索」というアルゴリズムは、
+   その初期値の質が前提条件に依存することを疑い、実際に画像を生成して
+   目視確認してから採用すること**(数値的なテストだけでは「読みにくさ」
+   は検出できない)。
+
+4. **Windowsの`iconutil`/`sips`はmacOS専用で、Windows開発機では動作確認
+   できない。** アプリアイコンをmacOS用`.icns`に変換する処理はCIの
+   macOSランナー上でのみ実行され、ローカル(Windows)では検証できない
+   (仕様書9.3節の既存の制約と同様のパターン)。Pillowでのリサイズ部分
+   (`scripts/build_macos_icon.py`)だけはクロスプラットフォームなので
+   ローカルでも動作確認できたが、`iconutil`本体の呼び出しはCI成功を
+   もって確認とするしかない。
+
+5. **`CronCreate`(セッション内スケジューラ)はセッションが終了すると
+   消える。** 「2.5時間後にこれを実行して」という依頼を受けてタスクを
+   予約したが、これはこのセッション限定(ディスクに保存されない)。
+   ターミナル/アプリを閉じると予約は失われる。長時間先の自動実行を
+   頼まれた場合は、この制約をユーザーに明示すること。
+
+6. (既存)**`.strip()`はMOLブロックを壊す**。`.rstrip()`に統一済み。
+7. (既存)**向き選択アルゴリズムは1つに統一すること**。`canonical_rotation`
+   に一本化済み、今回のKabsch向き一致もこの経路の拡張として実装した。
+8. (既存)**QWebEngineViewを大量に使うテストは同一プロセスでクラッシュ
+   しうる**。`test_structure_input_panel.py`・`test_reagent_editor_dialog.py`・
+   `test_main_window.py`は個別実行し、exit codeではなく「N passed」の
+   サマリー行で成否を判定すること(今回のセッションでも複数回発生した)。
+
+## パッケージング/リリース(完了 — v0.2.0公開済み)
+
+- アプリアイコン(`molweigh/resources/app_icon.ico`、ユーザー提供)を追加。
+  Windowsは`EXE(icon=...)`に直接渡す。macOSは`.icns`が必要なため
+  `scripts/build_macos_icon.py`をCIのmacOSランナー上で実行して変換する
+  (物理Mac実機がなくローカル検証はできない)。
+- `molweigh.spec`の`CFBundleShortVersionString`を`0.2.0`に更新。
+- Windows版はローカルビルド→実機起動→スクリーンショットで動作確認済み
+  (新アイコン、メインウィンドウ、当量計算テーブル、ライブラリカード、
+  PubChemパネル、3Dタブの新規クリーンアップボタン4種の表示を確認)。
+- タグ`v0.2.0`をpush→CI成功(Windows 13m35s・macOS 9m5s、run
+  [32529069146](https://github.com/STsuruga/MolWeigh/actions/runs/32529069146))
+  →両OS分のzipで[GitHub Release v0.2.0](https://github.com/STsuruga/MolWeigh/releases/tag/v0.2.0)を作成済み(公開済み、draft/prereleaseではない)。
 
 ## 次にやること(優先順)
 
-1. **ユーザーに「分子構造の描画の何が不満か」を具体的に聞く**。曖昧なまま
-   手を動かさない。
-2. パッケージング/リリースは完了。次にリリースする際は、`molweigh.spec`の
-   `CFBundleShortVersionString`とgitタグのバージョン番号を一致させること
-   (今回は両方とも`0.1.0`)。タグ付け・Release作成は公開リポジトリへの
-   可視アクションのため、実行前に必ずユーザーに確認すること。
-3. `LibraryEntry.render_mode`を手動切り替えるUIが無いこと(仕様書10章に
-   既知の制約として記載済み)。不満の正体がこれなら着手候補。
-4. CDXML(ChemDraw)連携は未着手(独立した小機能、仕様書10章参照)。
+1. **【最優先】「試薬追加ウィンドウの3Dビューで回転すると見かけの大きさが
+   変わって見える」という報告への対応。** 診断は完了しているが修正は
+   未着手:
+   - `compute_geometry`のスケール計算自体は分子の3D直径基準で固定されており、
+     回転そのものでスケール値が変わることはない(2026-08-22の別の修正で
+     この経路自体は既に直した)。
+   - 残っている原因候補: (a) 非球状の分子は真の3D形状として、視点角度に
+     よって投影後の見かけの大きさ(輪郭の占有面積)が変わるのは物理的に
+     正しい挙動であること、(b) `max_bond_px`(小分子の過拡大防止キャップ、
+     `core/lineart_render.py::compute_geometry`)が回転角度によって発動
+     有無が変わり、体感的な「ズーム」として知覚されている可能性。
+   - 次のセッションでは、まずユーザーに実機で具体的にどの分子・どの操作で
+     気になったかを再確認し、上記(a)(b)のどちらが支配的かを切り分けてから
+     対処方針を決めること(「回転で見かけの大きさが変わらないようにする」
+     ことと「読みやすさを保つ」ことはトレードオフになりうるため、安易に
+     再設計しない)。
+2. 新機能候補(Tier A/B/C)は仕様書11章参照。優先度は低いが、
+   `render_mode`手動切替UI(A1)・InChIKey重複検出(A8)あたりが着手しやすい。
+3. macOS版は引き続き実機未検証(CIビルド成功のみ)。実機が手に入れば
+   `.icns`アイコン反映も含めて動作確認すること。
