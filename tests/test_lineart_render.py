@@ -219,6 +219,56 @@ class TestRenderSvg:
         assert ">O<" in svg or "O</text>" in svg or "OH" in svg
 
 
+class TestComputeGeometryScaleIsRotationInvariant:
+    """回帰テスト(2026-08-22): `max_bond_px`キャップの判定に投影後(xy)の結合長を
+    使っていたため、結合が視線方向に近づいて投影長が0に潰れるとキャップが外れ、
+    スケールが回転につれて連続的に増大していた(直径基準にした当初の修正では
+    このキャップ判定だけ直っていなかった)。3原子(A-B: 5Å、A-C: 1Å)のscene を
+    y軸まわりで回転させると、A-B はやがて視線方向を向いて投影長が0に近づくが、
+    A-C は常にy軸上(回転の影響を受けない)なので、正しい実装ではA-Cの画面上の
+    長さ(=スケールの直接の指標)が回転角によらず一定になるはず。
+    """
+
+    def _scene(self) -> lr.Scene:
+        coords = np.array(
+            [
+                [0.0, 0.0, 0.0],  # A
+                [5.0, 0.0, 0.0],  # B (A-Bが分子の直径を決める)
+                [0.0, 1.0, 0.0],  # C (A-Cはy軸まわりの回転で不変)
+            ]
+        )
+        bonds = np.array([[0, 1], [0, 2]])
+        bond_length = float(np.median(np.linalg.norm(coords[bonds[:, 0]] - coords[bonds[:, 1]], axis=1)))
+        return lr.Scene(
+            coords=coords,
+            symbols=["C", "C", "N"],
+            labels=["A", "B", "C"],
+            charges=["", "", ""],
+            formal_charges=[0, 0, 0],
+            wedges=np.zeros(len(bonds), dtype=int),
+            bonds=bonds,
+            orders=np.ones(len(bonds), dtype=int),
+            ring_center=np.full((len(bonds), 3), np.nan),
+            initial_rotation=np.eye(3),
+            bond_length=bond_length,
+        )
+
+    def test_ruler_bond_pixel_length_stays_constant_across_rotation(self):
+        scene = self._scene()
+        params = lr.RenderParams(width=260, height=200, max_bond_px=46.0)
+
+        lengths = []
+        for angle_deg in range(0, 90, 5):
+            angle = np.radians(angle_deg)
+            q = (np.cos(angle / 2), 0.0, np.sin(angle / 2), 0.0)  # y軸まわりの回転
+            geometry = lr.compute_geometry(scene, q=q, params=params)
+            pos = {label.text: label.pos for label in geometry.labels}
+            lengths.append(np.linalg.norm(pos["A"] - pos["C"]))
+
+        lengths = np.array(lengths)
+        assert lengths.max() - lengths.min() < 1e-6
+
+
 class TestQuatToMatrix:
     def test_identity_quaternion_gives_identity_matrix(self):
         m = lr.quat_to_matrix((1, 0, 0, 0))

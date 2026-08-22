@@ -897,9 +897,13 @@ def compute_geometry(scene: Scene, q: Sequence[float] = (1, 0, 0, 0), params: Re
     diameter = max(diameter, 1e-6)
     avail = np.array([p.width, p.height]) * (1 - 2 * p.padding)
     scale = float(min(avail)) / diameter
-    proj_bond = np.median(np.linalg.norm(xy[scene.bonds[:, 0]] - xy[scene.bonds[:, 1]], axis=1))
-    if proj_bond * scale > p.max_bond_px:  # 小分子の過拡大を抑制
-        scale = p.max_bond_px / proj_bond
+    # 結合長は`scene.bond_length`(3D座標・回転前から計算済み、回転に依存しない)を
+    # 使う。投影後(xy)の結合長を使うと、結合が視線方向に近づくほど0に潰れて
+    # 回転依存になり、直径基準にした意味が失われるため(ユーザー報告により判明、
+    # 2026-08-22。直径基準の初回修正ではここが投影後の値のまま残っていた)。
+    typical_bond = max(scene.bond_length, 1e-6)
+    if typical_bond * scale > p.max_bond_px:  # 小分子の過拡大を抑制
+        scale = p.max_bond_px / typical_bond
     # 画面中心 = 分子の重心(scene.coordsは重心が原点になるよう構築済みのため、
     # 回転してもxy.mean(axis=0)は常に(0,0)近傍を保つ)。旧実装は投影後バウンディング
     # ボックスの中心を使っており、非対称な分子では回転につれてこの中心が分子本体
